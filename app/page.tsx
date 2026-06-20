@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import MainContent from '@/components/MainContent'
 
 export default function Home() {
