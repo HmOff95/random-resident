@@ -1,11 +1,10 @@
 import { create } from 'zustand'
-import { Resident, Position, Gender, ROOM_BOUNDS, AVATAR_SIZE, ARRIVAL_THRESHOLD, speedFor } from './types'
+import { Resident, Position, Gender, ARRIVAL_THRESHOLD, speedFor } from './types'
 import { decideNextIntent, randomPointInRoom, clampToRoom, resolveCollisions } from './simulation'
 import type { ResidentRow } from './supabase/types'
 
 interface ResidentStore {
   residents: Resident[]
-  initResidents: () => void
   loadResidents: (rows: ResidentRow[]) => void
   addResident: (row: ResidentRow) => void
   removeResident: (id: string) => void
@@ -14,51 +13,8 @@ interface ResidentStore {
   simulateStep: (dt: number) => void
 }
 
-const RESIDENT_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-const RESIDENT_NAMES = ['Bo', 'Mira', 'Tako', 'Yuna']
-
-function createInitialResident(
-  id: string,
-  owner_id: string,
-  name: string,
-  color: string
-): Resident {
-  const now = Date.now()
-  return {
-    id,
-    owner_id,
-    name,
-    color,
-    gender: 'unspecified',
-    likes: [],
-    dislikes: [],
-    mood: 'content',
-    ai_reason: null,
-    ai_reason_set_at: null,
-    position: randomPointInRoom(),
-    intent: {
-      type: 'idle',
-      reason: 'just waking up',
-      target: { x: 0, y: 0 },
-      startedAt: now,
-      duration: 1500 + Math.random() * 1500,
-    },
-    traits: {
-      sociability: Math.random(),
-      energy: Math.random(),
-    },
-  }
-}
-
 export const useResidentStore = create<ResidentStore>((set) => ({
   residents: [],
-
-  initResidents: () => {
-    const initialResidents = RESIDENT_NAMES.map((name, index) =>
-      createInitialResident(`resident-${index}`, name, RESIDENT_COLORS[index])
-    )
-    set({ residents: initialResidents })
-  },
 
   loadResidents: (rows: ResidentRow[]) => {
     let loadedResidents = rows.map((row) => {

@@ -1,4 +1,4 @@
-import { Resident, Intent, Position, ROOM_BOUNDS, AVATAR_SIZE, AVATAR_RADIUS, SOCIAL_DISTANCE, MIN_DISTANCE, ARRIVAL_THRESHOLD, speedFor } from './types'
+import { Resident, Intent, Position, ROOM_BOUNDS, AVATAR_SIZE, AVATAR_RADIUS, SOCIAL_DISTANCE, MIN_DISTANCE } from './types'
 
 export function hasRecentAIReason(resident: Resident): boolean {
   if (!resident.ai_reason || !resident.ai_reason_set_at) {

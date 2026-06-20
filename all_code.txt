@@ -2770,3 +2770,3659 @@ export default config
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/building-your-application/configuring/typescript for more information.
+===== E:\WebProj\RandomResident\lib\supabase\client.ts =====
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+===== E:\WebProj\RandomResident\lib\supabase\types.ts =====
+export interface ResidentRow {
+  id: string
+  owner_id: string
+  name: string
+  photo_url: string | null
+  color: string
+  gender: 'male' | 'female' | 'unspecified'
+  likes: string[]
+  dislikes: string[]
+  sociability: number
+  energy: number
+  mood: string
+  ai_reason: string | null
+  ai_reason_set_at: string | null
+  last_ticked_at: string
+  created_at: string
+}
+
+export interface MemoryRow {
+  id: string
+  resident_id: string
+  content: string
+  created_at: string
+}
+
+export interface TopicRow {
+  id: string
+  resident_id: string
+  submitted_by: string
+  topic_text: string
+  used: boolean
+  created_at: string
+}
+===== E:\WebProj\RandomResident\lib\supabase\server.ts =====
+import { createClient } from '@supabase/supabase-js'
+
+// Server-only client using the service role key — bypasses RLS.
+// NEVER import this file from any 'use client' component.
+export const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false } }
+)
+===== E:\WebProj\RandomResident\lib\tick\types.ts =====
+export interface TickResidentInput {
+  id: string
+  name: string
+  gender: string
+  sociability: number
+  energy: number
+  likes: string[]
+  dislikes: string[]
+  mood: string
+  recentMemories: string[] // up to 10, newest first
+  nearbyResidentNames: string[] // residents currently in 'seek_resident'/close proximity — keep simple: just pass all other batch member names for now
+  pendingTopics: string[] // unused topic_text values for this resident
+}
+
+export interface TickResidentOutput {
+  id: string
+  reason: string // new short status line, same flavor as existing rule-based reasons
+  newMemory: string | null // a short memory sentence to store, or null if nothing memorable happened
+  newMood: string | null // updated mood (single word/short phrase), or null to keep current mood
+}
+
+export interface TickResponse {
+  results: TickResidentOutput[]
+}
+===== E:\WebProj\RandomResident\lib\tick\buildPrompt.ts =====
+import { TickResidentInput } from './types'
+
+export function buildTickPrompt(residents: TickResidentInput[]): string {
+  return `You control the inner lives of ${residents.length} simulated characters in a cozy life-sim game, similar in tone to Tomodachi Life. For each character below, decide what they're doing right now and write ONE short status line (under 12 words, casual, third-person, like "is debating whether pineapple belongs on pizza").
+
+If a character has pending topics, they should react to/think about ONE of those topics in their status line and optionally form a new memory about it. If a character has no pending topics, give them a plausible idle/social status line based on their personality and mood — keep it light and varied.
+
+A character's likes/dislikes should influence their reaction if a topic relates to food. Sociability affects how social their status line is (high = mentions others, low = solo activity). Energy affects tone (high = excited/active, low = mellow/relaxed).
+
+Only set newMemory if something notable happened this tick (e.g. discussed a topic, had a strong reaction) — otherwise use null. Only set newMood if their mood should shift — otherwise use null. Keep moods to a single word or short phrase (e.g. "happy", "annoyed", "curious", "content").
+
+Characters:
+${JSON.stringify(residents, null, 2)}
+
+Respond ONLY with valid JSON matching this exact shape, no other text, no markdown code fences:
+{"results": [{"id": "...", "reason": "...", "newMemory": "..." | null, "newMood": "..." | null}]}`
+}
+===== E:\WebProj\RandomResident\lib\tick\groqClient.ts =====
+import { TickResponse } from './types'
+
+export async function callGroqTick(prompt: string): Promise<TickResponse> {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.9,
+      response_format: { type: 'json_object' },
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Groq API error (${response.status}): ${errText}`)
+  }
+
+  const data = await response.json()
+  const content = data.choices?.[0]?.message?.content
+  if (!content) {
+    throw new Error('Groq response missing content')
+  }
+
+  let parsed: TickResponse
+  try {
+    parsed = JSON.parse(content)
+  } catch (e) {
+    throw new Error(`Failed to parse Groq JSON response: ${content}`)
+  }
+
+  if (!Array.isArray(parsed.results)) {
+    throw new Error('Groq response missing results array')
+  }
+
+  return parsed
+}
+===== E:\WebProj\RandomResident\lib\types.ts =====
+export interface Position {
+  x: number
+  y: number
+}
+
+export type Gender = 'male' | 'female' | 'unspecified'
+
+export type IntentType = 'idle' | 'wander' | 'seek_resident'
+
+export interface Intent {
+  type: IntentType
+  reason: string
+  target: Position
+  targetResidentId?: string
+  startedAt: number // Date.now() when intent was chosen
+  duration: number // ms this intent should last before re-deciding
+}
+
+export interface Traits {
+  sociability: number // 0-1, higher = more likely to seek other residents
+  energy: number // 0-1, higher = shorter idle periods, faster movement
+}
+
+export const FOOD_CATALOG = [
+  'pizza',
+  'sushi',
+  'ramen',
+  'curry',
+  'tacos',
+  'burgers',
+  'salad',
+  'ice cream',
+  'chocolate',
+  'spicy food',
+  'seafood',
+  'natto',
+  'durian',
+  'cheese',
+  'pickles',
+  'mushrooms',
+  'tofu',
+  'dumplings',
+  'pasta',
+  'barbecue',
+] as const
+
+export interface Resident {
+  id: string
+  owner_id: string // auth user who created this resident
+  name: string
+  color: string
+  photo_url?: string | null // user's uploaded photo, if available
+  gender: Gender
+  likes: string[]
+  dislikes: string[]
+  mood: string
+  ai_reason?: string | null // AI-generated reason from last tick
+  ai_reason_set_at?: string | null // timestamp of when ai_reason was set
+  position: Position
+  intent: Intent
+  traits: Traits
+}
+
+export interface Memory {
+  id: string
+  resident_id: string
+  content: string
+  created_at: string
+}
+
+export interface Topic {
+  id: string
+  resident_id: string
+  submitted_by: string
+  topic_text: string
+  used: boolean
+  created_at: string
+}
+
+export const ROOM_BOUNDS = { width: 800, height: 500 }
+export const AVATAR_SIZE = 48 // px diameter
+export const AVATAR_RADIUS = AVATAR_SIZE / 2 // 24
+export const MIN_DISTANCE = AVATAR_SIZE // sum of two radii — circles must stay this far apart
+export const SOCIAL_DISTANCE = AVATAR_SIZE * 1.5 // desired gap when "hanging out" with someone
+export const ARRIVAL_THRESHOLD = 4 // px — close enough to target counts as "arrived"
+
+export function speedFor(traits: Traits): number {
+  // px per second
+  return 30 + traits.energy * 60
+}
+===== E:\WebProj\RandomResident\lib\simulation.ts =====
+import { Resident, Intent, Position, ROOM_BOUNDS, AVATAR_SIZE, AVATAR_RADIUS, SOCIAL_DISTANCE, MIN_DISTANCE, ARRIVAL_THRESHOLD, speedFor } from './types'
+
+export function hasRecentAIReason(resident: Resident): boolean {
+  if (!resident.ai_reason || !resident.ai_reason_set_at) {
+    return false
+  }
+  const aiReasonTime = new Date(resident.ai_reason_set_at).getTime()
+  const intentStartTime = resident.intent.startedAt
+  return aiReasonTime > intentStartTime
+}
+
+export function clampToRoom(pos: Position): Position {
+  return {
+    x: Math.min(Math.max(pos.x, AVATAR_RADIUS), ROOM_BOUNDS.width - AVATAR_RADIUS),
+    y: Math.min(Math.max(pos.y, AVATAR_RADIUS), ROOM_BOUNDS.height - AVATAR_RADIUS),
+  }
+}
+
+export function resolveCollisions(residents: Resident[]): void {
+  for (let i = 0; i < residents.length; i++) {
+    for (let j = i + 1; j < residents.length; j++) {
+      const a = residents[i]
+      const b = residents[j]
+
+      let dx = b.position.x - a.position.x
+      let dy = b.position.y - a.position.y
+      let distance = Math.sqrt(dx * dx + dy * dy)
+
+      // Handle zero distance (overlapping at same point)
+      if (distance === 0) {
+        dx = 0.01
+        dy = 0.01
+        distance = Math.sqrt(dx * dx + dy * dy)
+      }
+
+      if (distance < MIN_DISTANCE) {
+        const overlap = MIN_DISTANCE - distance
+        const nx = dx / distance
+        const ny = dy / distance
+
+        a.position.x -= (nx * overlap) / 2
+        a.position.y -= (ny * overlap) / 2
+        b.position.x += (nx * overlap) / 2
+        b.position.y += (ny * overlap) / 2
+
+        a.position = clampToRoom(a.position)
+        b.position = clampToRoom(b.position)
+      }
+    }
+  }
+}
+
+export function randomPointInRoom(): Position {
+  const margin = AVATAR_SIZE / 2
+  return {
+    x: Math.random() * (ROOM_BOUNDS.width - margin * 2) + margin,
+    y: Math.random() * (ROOM_BOUNDS.height - margin * 2) + margin,
+  }
+}
+
+export function decideNextIntent(
+  resident: Resident,
+  allResidents: Resident[],
+  now: number
+): Intent {
+  const roll = Math.random()
+  const seekThreshold = resident.traits.sociability * 0.5 // Seek if roll < sociability * 0.5
+
+  // Seek resident
+  if (roll < seekThreshold && allResidents.length > 1) {
+    const others = allResidents.filter((r) => r.id !== resident.id)
+    const targetResident = others[Math.floor(Math.random() * others.length)]
+
+    const energyFactor = 1 + resident.traits.energy
+    const duration = (4000 + Math.random() * 4000) / energyFactor
+
+    // Compute a point at SOCIAL_DISTANCE from the target resident at a random angle
+    const angle = Math.random() * Math.PI * 2
+    let target: Position = {
+      x: targetResident.position.x + Math.cos(angle) * SOCIAL_DISTANCE,
+      y: targetResident.position.y + Math.sin(angle) * SOCIAL_DISTANCE,
+    }
+    target = clampToRoom(target)
+
+    return {
+      type: 'seek_resident',
+      reason: `wants to hang out with ${targetResident.name}`,
+      target,
+      targetResidentId: targetResident.id,
+      startedAt: now,
+      duration,
+    }
+  }
+
+  // Wander or idle
+  const wanderThreshold = seekThreshold + resident.traits.energy * 0.3 // 30% of energy scale
+
+  if (roll < wanderThreshold) {
+    // Wander
+    const reasons = [
+      'feels like wandering around',
+      'is exploring a bit',
+      "wants to stretch their legs",
+      'is looking for something to do',
+    ]
+    const reason = reasons[Math.floor(Math.random() * reasons.length)]
+
+    return {
+      type: 'wander',
+      reason,
+      target: clampToRoom(randomPointInRoom()),
+      startedAt: now,
+      duration: 3000 + Math.random() * 3000,
+    }
+  }
+
+  // Idle
+  const idleReasons = [
+    'is taking a break',
+    'is daydreaming',
+    'is just vibing',
+    'is people-watching',
+  ]
+  const idleReason = hasRecentAIReason(resident) ? resident.ai_reason : idleReasons[Math.floor(Math.random() * idleReasons.length)]
+
+  return {
+    type: 'idle',
+    reason: idleReason!,
+    target: { ...resident.position },
+    startedAt: now,
+    duration: 2000 + Math.random() * 3000,
+  }
+}
+===== E:\WebProj\RandomResident\lib\residentStore.ts =====
+import { create } from 'zustand'
+import { Resident, Position, Gender, ROOM_BOUNDS, AVATAR_SIZE, ARRIVAL_THRESHOLD, speedFor } from './types'
+import { decideNextIntent, randomPointInRoom, clampToRoom, resolveCollisions } from './simulation'
+import type { ResidentRow } from './supabase/types'
+
+interface ResidentStore {
+  residents: Resident[]
+  initResidents: () => void
+  loadResidents: (rows: ResidentRow[]) => void
+  addResident: (row: ResidentRow) => void
+  removeResident: (id: string) => void
+  updateResidentIdentity: (id: string, updates: { name?: string; photo_url?: string | null; color?: string; gender?: Gender; likes?: string[]; dislikes?: string[] }) => void
+  updateResidentPosition: (id: string, position: Position) => void
+  simulateStep: (dt: number) => void
+}
+
+const RESIDENT_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
+const RESIDENT_NAMES = ['Bo', 'Mira', 'Tako', 'Yuna']
+
+function createInitialResident(
+  id: string,
+  owner_id: string,
+  name: string,
+  color: string
+): Resident {
+  const now = Date.now()
+  return {
+    id,
+    owner_id,
+    name,
+    color,
+    gender: 'unspecified',
+    likes: [],
+    dislikes: [],
+    mood: 'content',
+    ai_reason: null,
+    ai_reason_set_at: null,
+    position: randomPointInRoom(),
+    intent: {
+      type: 'idle',
+      reason: 'just waking up',
+      target: { x: 0, y: 0 },
+      startedAt: now,
+      duration: 1500 + Math.random() * 1500,
+    },
+    traits: {
+      sociability: Math.random(),
+      energy: Math.random(),
+    },
+  }
+}
+
+export const useResidentStore = create<ResidentStore>((set) => ({
+  residents: [],
+
+  initResidents: () => {
+    const initialResidents = RESIDENT_NAMES.map((name, index) =>
+      createInitialResident(`resident-${index}`, name, RESIDENT_COLORS[index])
+    )
+    set({ residents: initialResidents })
+  },
+
+  loadResidents: (rows: ResidentRow[]) => {
+    let loadedResidents = rows.map((row) => {
+      const now = Date.now()
+      return {
+        id: row.id,
+        owner_id: row.owner_id,
+        name: row.name,
+        color: row.color,
+        photo_url: row.photo_url,
+        gender: row.gender,
+        likes: row.likes,
+        dislikes: row.dislikes,
+        mood: row.mood,
+        ai_reason: row.ai_reason,
+        ai_reason_set_at: row.ai_reason_set_at,
+        position: randomPointInRoom(),
+        intent: {
+          type: 'idle' as const,
+          reason: 'is settling in',
+          target: randomPointInRoom(),
+          startedAt: now,
+          duration: 1000 + Math.random() * 2000,
+        },
+        traits: {
+          sociability: row.sociability,
+          energy: row.energy,
+        },
+      } as Resident
+    })
+
+    // Resolve collisions on initial load
+    resolveCollisions(loadedResidents)
+
+    set({ residents: loadedResidents })
+  },
+
+  addResident: (row: ResidentRow) => {
+    set((state) => {
+      const now = Date.now()
+      const newResident: Resident = {
+        id: row.id,
+        owner_id: row.owner_id,
+        gender: row.gender,
+        likes: row.likes,
+        dislikes: row.dislikes,
+        mood: row.mood,
+        ai_reason: row.ai_reason,
+        ai_reason_set_at: row.ai_reason_set_at,
+        name: row.name,
+        color: row.color,
+        photo_url: row.photo_url,
+        position: randomPointInRoom(),
+        intent: {
+          type: 'idle',
+          reason: 'is settling in',
+          target: randomPointInRoom(),
+          startedAt: now,
+          duration: 1000 + Math.random() * 2000,
+        },
+        traits: {
+          sociability: row.sociability,
+          energy: row.energy,
+        },
+      }
+
+      const updatedResidents = [...state.residents, newResident]
+      resolveCollisions(updatedResidents)
+      return { residents: updatedResidents }
+    })
+  },
+
+  removeResident: (id: string) => {
+    set((state) => ({
+      residents: state.residents.filter((r) => r.id !== id),
+    }))
+  },
+
+  updateResidentIdentity: (
+    id: string,
+    updates: {
+      name?: string
+      photo_url?: string | null
+      color?: string
+      gender?: Gender
+      likes?: string[]
+      dislikes?: string[]
+    }
+  ) => {
+    set((state) => ({
+      residents: state.residents.map((resident) =>
+        resident.id === id
+          ? {
+              ...resident,
+              ...(updates.name !== undefined && { name: updates.name }),
+              ...(updates.photo_url !== undefined && { photo_url: updates.photo_url }),
+              ...(updates.color !== undefined && { color: updates.color }),
+              ...(updates.gender !== undefined && { gender: updates.gender }),
+              ...(updates.likes !== undefined && { likes: updates.likes }),
+              ...(updates.dislikes !== undefined && { dislikes: updates.dislikes }),
+            }
+          : resident
+      ),
+    }))
+  },
+
+  updateResidentPosition: (id: string, position: Position) => {
+    set((state) => ({
+      residents: state.residents.map((resident) =>
+        resident.id === id ? { ...resident, position } : resident
+      ),
+    }))
+  },
+
+  simulateStep: (dt: number) => {
+    set((state) => {
+      const now = Date.now()
+      let updatedResidents = state.residents.map((resident) => {
+        const timeSinceStart = now - resident.intent.startedAt
+
+        // Check if intent duration exceeded
+        if (timeSinceStart >= resident.intent.duration) {
+          const nextIntent = decideNextIntent(resident, state.residents, now)
+          return {
+            ...resident,
+            intent: nextIntent,
+            position: resident.position, // Keep current position
+          }
+        }
+
+        // Handle wander/seek_resident movement
+        if (
+          resident.intent.type === 'wander' ||
+          resident.intent.type === 'seek_resident'
+        ) {
+          const dx = resident.intent.target.x - resident.position.x
+          const dy = resident.intent.target.y - resident.position.y
+          const distanceToTarget = Math.sqrt(dx * dx + dy * dy)
+
+          // Check if arrived
+          if (distanceToTarget <= ARRIVAL_THRESHOLD) {
+            return resident // Stay at target
+          }
+
+          // Move toward target
+          const speed = speedFor(resident.traits)
+          const moveDistance = speed * dt
+
+          if (moveDistance >= distanceToTarget) {
+            // Snap to target to avoid overshooting
+            return {
+              ...resident,
+              position: resident.intent.target,
+            }
+          }
+
+          // Move by moveDistance toward target
+          const nx = dx / distanceToTarget
+          const ny = dy / distanceToTarget
+          return {
+            ...resident,
+            position: {
+              x: resident.position.x + nx * moveDistance,
+              y: resident.position.y + ny * moveDistance,
+            },
+          }
+        }
+
+        // Idle - no position change
+        return resident
+      })
+
+      // Resolve collisions
+      resolveCollisions(updatedResidents)
+
+      // Clamp all positions to room bounds
+      updatedResidents = updatedResidents.map((resident) => ({
+        ...resident,
+        position: clampToRoom(resident.position),
+      }))
+
+      return { residents: updatedResidents }
+    })
+  },
+}))
+===== E:\WebProj\RandomResident\lib\auth.ts =====
+'use client'
+
+import { useEffect, useState } from 'react'
+import { User } from '@supabase/supabase-js'
+import { supabase } from './supabase/client'
+
+export function useAuth(): {
+  user: User | null
+  loading: boolean
+} {
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const getSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        setUser(data.session?.user ?? null)
+      } catch (error) {
+        console.error('Failed to get session:', error)
+        setUser(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    getSession()
+
+    // Subscribe to auth state changes
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null)
+      }
+    )
+
+    // Clean up subscription on unmount
+    return () => {
+      authListener?.subscription.unsubscribe()
+    }
+  }, [])
+
+  return { user, loading }
+}
+===== E:\WebProj\RandomResident\lib\realtime.ts =====
+import { supabase } from './supabase/client'
+import { RealtimeChannel } from '@supabase/supabase-js'
+
+export function createWorldChannels(
+  onPositionUpdate: (residentId: string, x: number, y: number) => void,
+  onResidentInsert: (row: any) => void,
+  onResidentUpdate: (row: any) => void,
+  onResidentDelete: (id: string) => void,
+): { positionChannel: RealtimeChannel; identityChannel: RealtimeChannel } {
+  const positionChannel = supabase
+    .channel('world-positions')
+    .on('broadcast', { event: 'position' }, ({ payload }) => {
+      onPositionUpdate(payload.residentId, payload.x, payload.y)
+    })
+    .subscribe()
+
+  const identityChannel = supabase
+    .channel('world-identity')
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'residents' },
+      ({ new: row }) => onResidentInsert(row),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'residents' },
+      ({ new: row }) => onResidentUpdate(row),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'residents' },
+      ({ old: row }) => onResidentDelete(row.id),
+    )
+    .subscribe()
+
+  return { positionChannel, identityChannel }
+}
+===== E:\WebProj\RandomResident\lib\memoriesStore.ts =====
+'use client'
+
+import { create } from 'zustand'
+import { Memory } from './types'
+
+interface MemoriesStore {
+  memoriesByResident: Record<string, Memory[]>
+  loadMemories: (residentId: string, memories: Memory[]) => void
+}
+
+export const useMemoriesStore = create<MemoriesStore>((set) => ({
+  memoriesByResident: {},
+
+  loadMemories: (residentId: string, memories: Memory[]) => {
+    set((state) => ({
+      memoriesByResident: {
+        ...state.memoriesByResident,
+        [residentId]: memories,
+      },
+    }))
+  },
+}))
+===== E:\WebProj\RandomResident\lib\topicsStore.ts =====
+'use client'
+
+import { create } from 'zustand'
+import { Topic } from './types'
+
+interface TopicsStore {
+  topicsByResident: Record<string, Topic[]>
+  loadTopics: (residentId: string, topics: Topic[]) => void
+  addTopic: (topic: Topic) => void
+}
+
+export const useTopicsStore = create<TopicsStore>((set) => ({
+  topicsByResident: {},
+
+  loadTopics: (residentId: string, topics: Topic[]) => {
+    set((state) => ({
+      topicsByResident: {
+        ...state.topicsByResident,
+        [residentId]: topics,
+      },
+    }))
+  },
+
+  addTopic: (topic: Topic) => {
+    set((state) => ({
+      topicsByResident: {
+        ...state.topicsByResident,
+        [topic.resident_id]: [...(state.topicsByResident[topic.resident_id] || []), topic],
+      },
+    }))
+  },
+}))
+===== E:\WebProj\RandomResident\components\ResidentAvatar.tsx =====
+'use client'
+
+import { Resident, AVATAR_SIZE } from '@/lib/types'
+import { useTopicsStore } from '@/lib/topicsStore'
+
+interface ResidentAvatarProps {
+  resident: Resident
+  onAvatarClick: () => void
+}
+
+export default function ResidentAvatar({ resident, onAvatarClick }: ResidentAvatarProps) {
+  const { topicsByResident } = useTopicsStore()
+  const pendingTopics = topicsByResident[resident.id] || []
+  const hasPendingTopics = pendingTopics.length > 0
+
+  return (
+    <div
+      className="absolute"
+      style={{
+        x: resident.position.x - AVATAR_SIZE / 2,
+        y: resident.position.y - AVATAR_SIZE / 2,
+        transform: `translate(${resident.position.x - AVATAR_SIZE / 2}px, ${resident.position.y - AVATAR_SIZE / 2}px)`,
+      }}
+    >
+      {/* Reason bubble */}
+      <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 transform whitespace-nowrap rounded-full bg-black/75 px-3 py-1 text-xs text-white">
+        {resident.intent.reason}
+      </div>
+
+      {/* Avatar circle */}
+      <div
+        onClick={onAvatarClick}
+        className="flex cursor-pointer items-center justify-center rounded-full shadow-md transition-transform hover:scale-110"
+        style={{
+          width: AVATAR_SIZE,
+          height: AVATAR_SIZE,
+          backgroundColor: resident.color,
+          backgroundImage: resident.photo_url
+            ? `url(${resident.photo_url})`
+            : undefined,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      >
+        {/* Topic indicator badge */}
+        {hasPendingTopics && (
+          <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-xs font-bold text-gray-800">
+            💭
+          </div>
+        )}
+
+        {/* Name label */}
+        <div className="absolute top-full mt-1 text-center text-xs font-semibold text-gray-800">
+          {resident.name}
+        </div>
+      </div>
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\WorldView.tsx =====
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { useAnimationFrame } from 'framer-motion'
+import { ROOM_BOUNDS } from '@/lib/types'
+import { useResidentStore } from '@/lib/residentStore'
+import { supabase } from '@/lib/supabase/client'
+import { createWorldChannels } from '@/lib/realtime'
+import ResidentAvatar from './ResidentAvatar'
+import TopicModal from './TopicModal'
+
+export default function WorldView() {
+  const { residents, loadResidents, simulateStep, addResident, removeResident, updateResidentIdentity, updateResidentPosition } = useResidentStore()
+  const [user, setUser] = useState<any>(null)
+  const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null)
+  const positionChannelRef = useRef<any>(null)
+  const identityChannelRef = useRef<any>(null)
+  const residentsRef = useRef(residents)
+  const lastBroadcast = useRef(0)
+
+  // Fetch current user and load initial residents
+  useEffect(() => {
+    const fetchUserAndResidents = async () => {
+      const { data: { user: sessionUser } } = await supabase.auth.getUser()
+      if (sessionUser) {
+        setUser(sessionUser)
+      }
+
+      const { data } = await supabase.from('residents').select('*')
+      if (data) {
+        loadResidents(data)
+      }
+    }
+
+    fetchUserAndResidents()
+  }, [loadResidents])
+
+  // Keep residentsRef in sync with residents state
+  useEffect(() => {
+    residentsRef.current = residents
+  }, [residents])
+
+  // Set up realtime channels — only re-run when user changes
+  useEffect(() => {
+    if (!user) return
+
+    const { positionChannel, identityChannel } = createWorldChannels(
+      // onPositionUpdate — only apply to residents we DON'T own
+      (residentId, x, y) => {
+        const resident = residentsRef.current.find(r => r.id === residentId)
+        if (resident && resident.owner_id !== user.id) {
+          updateResidentPosition(residentId, { x, y })
+        }
+      },
+      // onResidentInsert
+      (row) => addResident(row),
+      // onResidentUpdate
+      (row) => updateResidentIdentity(row.id, { name: row.name, photo_url: row.photo_url }),
+      // onResidentDelete
+      (id) => removeResident(id),
+    )
+
+    positionChannelRef.current = positionChannel
+    identityChannelRef.current = identityChannel
+
+    return () => {
+      supabase.removeChannel(positionChannel)
+      supabase.removeChannel(identityChannel)
+    }
+  }, [user])
+
+  useAnimationFrame((time, delta) => {
+    simulateStep(delta / 1000) // delta is in ms, convert to seconds
+
+    // Broadcast positions for owned residents, throttled to once per second
+    if (user && positionChannelRef.current && time - lastBroadcast.current > 1000) {
+      lastBroadcast.current = time
+      const myResidents = residents.filter(r => r.owner_id === user.id)
+      myResidents.forEach(r => {
+        positionChannelRef.current.send({
+          type: 'broadcast',
+          event: 'position',
+          payload: { residentId: r.id, x: r.position.x, y: r.position.y }
+        })
+      })
+    }
+  })
+
+  return (
+    <div
+      className="relative rounded-lg border-2 border-gray-300 bg-gray-50 shadow-lg"
+      style={{
+        width: ROOM_BOUNDS.width,
+        height: ROOM_BOUNDS.height,
+      }}
+    >
+      {residents.map((resident) => (
+        <ResidentAvatar
+          key={resident.id}
+          resident={resident}
+          onAvatarClick={() => setSelectedResidentId(resident.id)}
+        />
+      ))}
+
+      {selectedResidentId && user && (
+        <TopicModal
+          residentId={selectedResidentId}
+          residentName={residents.find(r => r.id === selectedResidentId)?.name || 'Unknown'}
+          userId={user.id}
+          onClose={() => setSelectedResidentId(null)}
+        />
+      )}
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\ResidentEditorPanel.tsx =====
+'use client'
+
+import { useState, ChangeEvent, FormEvent } from 'react'
+import { User } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase/client'
+import { useResidentStore } from '@/lib/residentStore'
+import { AVATAR_SIZE, Gender, FOOD_CATALOG } from '@/lib/types'
+
+interface ResidentEditorPanelProps {
+  user: User
+}
+
+const RESIDENT_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#95E1D3']
+
+function randomFromPalette(): string {
+  return RESIDENT_COLORS[Math.floor(Math.random() * RESIDENT_COLORS.length)]
+}
+
+export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editGender, setEditGender] = useState<Gender>('unspecified')
+  const [editLikes, setEditLikes] = useState<string[]>([])
+  const [editDislikes, setEditDislikes] = useState<string[]>([])
+  const [isSavingName, setIsSavingName] = useState(false)
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false)
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const { residents, updateResidentIdentity, addResident, removeResident } = useResidentStore()
+  const myResidents = residents.filter(r => r.owner_id === user.id)
+  const canAddResident = myResidents.length < 5
+
+  const handleOpenPanel = () => {
+    setIsOpen(true)
+  }
+
+  const handleSaveName = async (e: FormEvent, residentId: string) => {
+    e.preventDefault()
+    if (!editName.trim()) {
+      setError('Name cannot be empty')
+      return
+    }
+
+    setIsSavingName(true)
+    setError(null)
+
+    try {
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ name: editName })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      updateResidentIdentity(residentId, { name: editName })
+      setEditingId(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save name')
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  const handleSavePreferences = async (residentId: string) => {
+    setIsSavingPreferences(true)
+    setError(null)
+
+    try {
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ gender: editGender, likes: editLikes, dislikes: editDislikes })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      updateResidentIdentity(residentId, { gender: editGender, likes: editLikes, dislikes: editDislikes })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save preferences')
+    } finally {
+      setIsSavingPreferences(false)
+    }
+  }
+
+  const toggleLike = (food: string) => {
+    if (editLikes.includes(food)) {
+      setEditLikes(editLikes.filter(f => f !== food))
+    } else if (editLikes.length < 3) {
+      setEditLikes([...editLikes, food])
+    }
+  }
+
+  const toggleDislike = (food: string) => {
+    if (editDislikes.includes(food)) {
+      setEditDislikes(editDislikes.filter(f => f !== food))
+    } else if (editDislikes.length < 3) {
+      setEditDislikes([...editDislikes, food])
+    }
+  }
+
+  const handlePhotoUpload = async (e: ChangeEvent<HTMLInputElement>, residentId: string) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setIsUploadingPhoto(true)
+    setError(null)
+
+    try {
+      // Get file extension
+      const ext = file.name.split('.').pop() || 'png'
+      const filePath = `${user.id}/${residentId}/avatar.${ext}`
+
+      // Upload to storage
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file, { upsert: true })
+
+      if (uploadError) throw uploadError
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath)
+
+      const photoUrl = urlData.publicUrl
+
+      // Update database
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ photo_url: photoUrl })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      // Update local store immediately
+      updateResidentIdentity(residentId, { photo_url: photoUrl })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload photo')
+    } finally {
+      setIsUploadingPhoto(false)
+      // Reset file input
+      if (e.target) {
+        e.target.value = ''
+      }
+    }
+  }
+
+  const handleDeleteResident = async (residentId: string) => {
+    if (!confirm('Are you sure you want to delete this resident?')) return
+
+    setError(null)
+    try {
+      const { error: deleteError } = await supabase
+        .from('residents')
+        .delete()
+        .eq('id', residentId)
+
+      if (deleteError) throw deleteError
+
+      removeResident(residentId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete resident')
+    }
+  }
+
+  const handleAddResident = async () => {
+    if (!canAddResident) return
+
+    setIsCreating(true)
+    setError(null)
+
+    try {
+      const color = randomFromPalette()
+      const { data, error: insertError } = await supabase
+        .from('residents')
+        .insert({ owner_id: user.id, name: 'New Resident', color })
+        .select()
+        .single()
+
+      if (insertError) throw insertError
+
+      if (data) {
+        addResident(data)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create resident')
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50">
+      {/* Toggle Button */}
+      <button
+        onClick={handleOpenPanel}
+        className="mb-4 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors"
+      >
+        My Residents ({myResidents.length}/5)
+      </button>
+
+      {/* Slide-in Panel */}
+      {isOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}>
+          <div
+            className="fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl overflow-y-auto transform transition-transform"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '100%' }}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Error Message */}
+              {error && (
+                <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              {/* Residents List */}
+              {myResidents.length === 0 ? (
+                <p className="text-gray-600 text-sm">No residents yet. Create one to get started!</p>
+              ) : (
+                <div className="space-y-4">
+                  {myResidents.map((resident) => (
+                    <div key={resident.id} className="border border-gray-200 rounded-lg p-4">
+                      {/* Resident Header */}
+                      <div className="flex items-center gap-4 mb-4">
+                        <div
+                          className="flex-shrink-0 rounded-full"
+                          style={{
+                            width: AVATAR_SIZE,
+                            height: AVATAR_SIZE,
+                            backgroundColor: resident.color,
+                            backgroundImage: resident.photo_url
+                              ? `url(${resident.photo_url})`
+                              : undefined,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }}
+                        />
+                        <div className="flex-grow">
+                          {editingId === resident.id ? (
+                            <form onSubmit={(e) => handleSaveName(e, resident.id)} className="space-y-2">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                placeholder="Resident name"
+                                className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                                autoFocus
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={isSavingName}
+                                  className="flex-1 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm font-medium py-1 transition-colors"
+                                >
+                                  {isSavingName ? 'Saving...' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingId(null)}
+                                  className="flex-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div>
+                              <p className="font-medium text-gray-800">{resident.name}</p>
+                              <button
+                                onClick={() => {
+                                  setEditingId(resident.id)
+                                  setEditName(resident.name)
+                                  setEditGender(resident.gender)
+                                  setEditLikes(resident.likes)
+                                  setEditDislikes(resident.dislikes)
+                                }}
+                                className="text-xs text-blue-500 hover:text-blue-700"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDeleteResident(resident.id)}
+                          className="text-red-500 hover:text-red-700 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Photo Upload */}
+                      {editingId === resident.id && (
+                        <div className="border-t pt-4 space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Upload Photo
+                            </label>
+                            <label className="block">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handlePhotoUpload(e, resident.id)}
+                                disabled={isUploadingPhoto}
+                                className="hidden"
+                              />
+                              <div className="w-full rounded border-2 border-dashed border-gray-300 hover:border-blue-400 px-3 py-3 text-center cursor-pointer transition-colors">
+                                {isUploadingPhoto ? (
+                                  <p className="text-xs text-gray-600">Uploading...</p>
+                                ) : (
+                                  <p className="text-xs text-gray-600">
+                                    Click to choose image
+                                  </p>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+
+                          {/* Gender Selector */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Gender
+                            </label>
+                            <select
+                              value={editGender}
+                              onChange={(e) => setEditGender(e.target.value as Gender)}
+                              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                            >
+                              <option value="unspecified">Unspecified</option>
+                              <option value="female">Female</option>
+                              <option value="male">Male</option>
+                            </select>
+                          </div>
+
+                          {/* Likes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Likes ({editLikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`like-${food}`}
+                                  onClick={() => toggleLike(food)}
+                                  disabled={editLikes.length >= 3 && !editLikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editLikes.includes(food)
+                                      ? 'bg-green-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Dislikes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Dislikes ({editDislikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`dislike-${food}`}
+                                  onClick={() => toggleDislike(food)}
+                                  disabled={editDislikes.length >= 3 && !editDislikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editDislikes.includes(food)
+                                      ? 'bg-red-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Save Preferences Button */}
+                          <button
+                            onClick={() => handleSavePreferences(resident.id)}
+                            disabled={isSavingPreferences}
+                            className="w-full rounded bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white text-sm font-medium py-2 transition-colors"
+                          >
+                            {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Resident Button */}
+              <div>
+                <button
+                  onClick={handleAddResident}
+                  disabled={!canAddResident || isCreating}
+                  className="w-full rounded bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+                >
+                  {isCreating ? 'Creating...' : '+ Add Resident'}
+                </button>
+                {!canAddResident && (
+                  <p className="text-xs text-gray-500 text-center mt-2">
+                    5 resident limit reached
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\MainContent.tsx =====
+'use client'
+
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/lib/auth'
+import { supabase } from '@/lib/supabase/client'
+import WorldView from './WorldView'
+import ResidentEditorPanel from './ResidentEditorPanel'
+
+export default function MainContent() {
+  const { user, loading } = useAuth()
+  const router = useRouter()
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4">
+        <p className="text-gray-700 text-lg">
+          You need to sign in to enter the living room.
+        </p>
+        <Link
+          href="/login"
+          className="rounded bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 transition-colors"
+        >
+          Go to Sign In
+        </Link>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={handleSignOut}
+        className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-800 font-medium z-40"
+      >
+        Sign Out
+      </button>
+      <WorldView />
+      <ResidentEditorPanel user={user} />
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\TopicModal.tsx =====
+'use client'
+
+import { useState, FormEvent } from 'react'
+import { supabase } from '@/lib/supabase/client'
+import { useTopicsStore } from '@/lib/topicsStore'
+
+interface TopicModalProps {
+  residentId: string
+  residentName: string
+  userId: string
+  onClose: () => void
+}
+
+export default function TopicModal({ residentId, residentName, userId, onClose }: TopicModalProps) {
+  const [topicText, setTopicText] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [confirmation, setConfirmation] = useState(false)
+  const { addTopic } = useTopicsStore()
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!topicText.trim()) return
+
+    setIsLoading(true)
+
+    try {
+      const { data, error } = await supabase
+        .from('topics')
+        .insert({
+          resident_id: residentId,
+          submitted_by: userId,
+          topic_text: topicText,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      addTopic(data)
+      setConfirmation(true)
+      setTopicText('')
+
+      // Close modal after showing confirmation
+      setTimeout(() => {
+        onClose()
+      }, 1500)
+    } catch (err) {
+      console.error('Failed to submit topic:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-96 rounded-lg bg-white p-6 shadow-lg">
+        <h2 className="mb-4 text-xl font-bold">Talk to {residentName}</h2>
+
+        {confirmation ? (
+          <div className="text-center">
+            <p className="text-lg font-semibold text-green-600">
+              ✓ {residentName} will hear about it
+            </p>
+            <p className="mt-2 text-sm text-gray-600">Topic queued for discussion</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <textarea
+              value={topicText}
+              onChange={(e) => setTopicText(e.target.value.slice(0, 100))}
+              placeholder="What should they talk about?"
+              maxLength={100}
+              className="mb-2 w-full rounded border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              rows={4}
+            />
+            <div className="mb-4 text-xs text-gray-500">
+              {topicText.length}/100 characters
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 rounded bg-gray-300 px-4 py-2 font-semibold hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!topicText.trim() || isLoading}
+                className="flex-1 rounded bg-blue-500 px-4 py-2 font-semibold text-white hover:bg-blue-600 disabled:bg-gray-400"
+              >
+                {isLoading ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\app\login\page.tsx =====
+'use client'
+
+import { FormEvent, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase/client'
+
+const COLOR_PALETTE = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#95E1D3', '#F38181', '#AA96DA', '#FCBAD3']
+
+export default function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
+
+  const getRandomColor = () => COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)]
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setLoading(true)
+
+    try {
+      if (isSignUp) {
+        // Sign up
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+        })
+
+        if (signUpError) throw signUpError
+
+        if (data.user) {
+          // Insert resident row
+          const { error: insertError } = await supabase.from('residents').insert({
+            owner_id: data.user.id,
+            name: email.split('@')[0],
+            color: getRandomColor(),
+          })
+
+          if (insertError) {
+            // Auth account exists but resident creation failed — surface this
+            // clearly rather than a generic error, since the user technically
+            // has an account now
+            throw new Error(
+              `Account created, but we couldn't set up your first resident: ${insertError.message}. Try signing in — you can add a resident from the panel.`
+            )
+          }
+        }
+      } else {
+        // Sign in
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        })
+
+        if (signInError) throw signInError
+      }
+
+      // Redirect to home
+      router.push('/')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-indigo-100 p-4">
+      <div className="w-full max-w-md rounded-lg bg-white shadow-lg p-8">
+        <h1 className="mb-2 text-2xl font-bold text-gray-800">
+          {isSignUp ? 'Create Account' : 'Sign In'}
+        </h1>
+        <p className="mb-6 text-gray-600">
+          {isSignUp ? 'Join the living room' : 'Welcome back'}
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+          >
+            {loading
+              ? isSignUp
+                ? 'Creating account...'
+                : 'Signing in...'
+              : isSignUp
+              ? 'Sign Up'
+              : 'Sign In'}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <p className="text-gray-600 text-sm">
+            {isSignUp ? 'Already have an account?' : "Don't have an account?"}
+          </p>
+          <button
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="text-blue-500 hover:text-blue-700 font-medium text-sm mt-2"
+          >
+            {isSignUp ? 'Sign In' : 'Sign Up'}
+          </button>
+        </div>
+      </div>
+    </main>
+  )
+}
+===== E:\WebProj\RandomResident\app\api\tick\route.ts =====
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase/server'
+import { buildTickPrompt } from '@/lib/tick/buildPrompt'
+import { callGroqTick } from '@/lib/tick/groqClient'
+import { TickResidentInput } from '@/lib/tick/types'
+
+const BATCH_SIZE = 20
+const MAX_MEMORIES = 10
+
+export async function GET(req: NextRequest) {
+  // Auth check
+  const authHeader = req.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.TICK_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    // 1. Fetch the oldest-ticked residents, up to BATCH_SIZE
+    const { data: residents, error: residentsError } = await supabaseAdmin
+      .from('residents')
+      .select('*')
+      .order('last_ticked_at', { ascending: true })
+      .limit(BATCH_SIZE)
+
+    if (residentsError) throw residentsError
+    if (!residents || residents.length === 0) {
+      return NextResponse.json({ message: 'No residents to process' })
+    }
+
+    const residentIds = residents.map((r) => r.id)
+
+    // 2. Fetch recent memories for these residents (up to MAX_MEMORIES each)
+    const { data: allMemories, error: memError } = await supabaseAdmin
+      .from('memories')
+      .select('*')
+      .in('resident_id', residentIds)
+      .order('created_at', { ascending: false })
+
+    if (memError) throw memError
+
+    const memoriesByResident = new Map<string, string[]>()
+    for (const mem of allMemories || []) {
+      const list = memoriesByResident.get(mem.resident_id) || []
+      if (list.length < MAX_MEMORIES) {
+        list.push(mem.content)
+      }
+      memoriesByResident.set(mem.resident_id, list)
+    }
+
+    // 3. Fetch pending topics for these residents
+    const { data: topics, error: topicError } = await supabaseAdmin
+      .from('topics')
+      .select('*')
+      .in('resident_id', residentIds)
+      .eq('used', false)
+
+    if (topicError) throw topicError
+
+    const topicsByResident = new Map<string, Array<{ id: string; text: string }>>()
+    for (const topic of topics || []) {
+      const list = topicsByResident.get(topic.resident_id) || []
+      list.push({ id: topic.id, text: topic.topic_text })
+      topicsByResident.set(topic.resident_id, list)
+    }
+
+    // 4. Build tick input
+    const allNames = residents.map((r) => r.name)
+    const tickInput: TickResidentInput[] = residents.map((r) => ({
+      id: r.id,
+      name: r.name,
+      gender: r.gender,
+      sociability: r.sociability,
+      energy: r.energy,
+      likes: r.likes,
+      dislikes: r.dislikes,
+      mood: r.mood,
+      recentMemories: memoriesByResident.get(r.id) || [],
+      nearbyResidentNames: allNames.filter((n) => n !== r.name),
+      pendingTopics: (topicsByResident.get(r.id) || []).map((t) => t.text),
+    }))
+
+    // 5. Call Groq once for the whole batch
+    const prompt = buildTickPrompt(tickInput)
+    const tickResult = await callGroqTick(prompt)
+
+    // 6. Write results back
+    const now = new Date().toISOString()
+    for (const result of tickResult.results) {
+      // Update resident: mood (if changed) + last_ticked_at + ai_reason
+      const updates: Record<string, string> = { 
+        last_ticked_at: now,
+        ai_reason: result.reason,
+        ai_reason_set_at: now
+      }
+      if (result.newMood) updates.mood = result.newMood
+
+      await supabaseAdmin.from('residents').update(updates).eq('id', result.id)
+
+      // Insert new memory if present
+      if (result.newMemory) {
+        await supabaseAdmin.from('memories').insert({
+          resident_id: result.id,
+          content: result.newMemory,
+        })
+
+        // Prune memories beyond MAX_MEMORIES for this resident
+        const { data: residentMemories } = await supabaseAdmin
+          .from('memories')
+          .select('id')
+          .eq('resident_id', result.id)
+          .order('created_at', { ascending: false })
+
+        if (residentMemories && residentMemories.length > MAX_MEMORIES) {
+          const idsToDelete = residentMemories.slice(MAX_MEMORIES).map((m) => m.id)
+          await supabaseAdmin.from('memories').delete().in('id', idsToDelete)
+        }
+      }
+
+      // Mark all pending topics for this resident as used
+      const pendingTopicIds = (topicsByResident.get(result.id) || []).map((t) => t.id)
+      if (pendingTopicIds.length > 0) {
+        await supabaseAdmin
+          .from('topics')
+          .update({ used: true })
+          .in('id', pendingTopicIds)
+      }
+    }
+
+    return NextResponse.json({
+      processed: tickResult.results.length,
+      results: tickResult.results,
+    })
+  } catch (err) {
+    console.error('Tick error:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Unknown tick error' },
+      { status: 500 }
+    )
+  }
+}
+===== E:\WebProj\RandomResident\app\layout.tsx =====
+import type { Metadata } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: 'Random Resident',
+  description: 'A Tomodachi Life-inspired web app prototype',
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  )
+}
+===== E:\WebProj\RandomResident\app\page.tsx =====
+import MainContent from '@/components/MainContent'
+
+export default function Home() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-indigo-100 p-4">
+      <h1 className="mb-12 text-4xl font-bold text-gray-800">Your Residents</h1>
+      <MainContent />
+    </main>
+  )
+}
+===== E:\WebProj\RandomResident\tailwind.config.ts =====
+import type { Config } from 'next'
+
+const config: Config = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+export default config
+===== E:\WebProj\RandomResident\next-env.d.ts =====
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/building-your-application/configuring/typescript for more information.
+===== E:\WebProj\RandomResident\lib\supabase\client.ts =====
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+===== E:\WebProj\RandomResident\lib\supabase\types.ts =====
+export interface ResidentRow {
+  id: string
+  owner_id: string
+  name: string
+  photo_url: string | null
+  color: string
+  gender: 'male' | 'female' | 'unspecified'
+  likes: string[]
+  dislikes: string[]
+  sociability: number
+  energy: number
+  mood: string
+  ai_reason: string | null
+  ai_reason_set_at: string | null
+  last_ticked_at: string
+  created_at: string
+}
+
+export interface MemoryRow {
+  id: string
+  resident_id: string
+  content: string
+  created_at: string
+}
+
+export interface TopicRow {
+  id: string
+  resident_id: string
+  submitted_by: string
+  topic_text: string
+  used: boolean
+  created_at: string
+}
+===== E:\WebProj\RandomResident\lib\supabase\server.ts =====
+import { createClient } from '@supabase/supabase-js'
+
+// Server-only client using the service role key — bypasses RLS.
+// NEVER import this file from any 'use client' component.
+export const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false } }
+)
+===== E:\WebProj\RandomResident\lib\tick\types.ts =====
+export interface TickResidentInput {
+  id: string
+  name: string
+  gender: string
+  sociability: number
+  energy: number
+  likes: string[]
+  dislikes: string[]
+  mood: string
+  recentMemories: string[] // up to 10, newest first
+  nearbyResidentNames: string[] // residents currently in 'seek_resident'/close proximity — keep simple: just pass all other batch member names for now
+  pendingTopics: string[] // unused topic_text values for this resident
+}
+
+export interface TickResidentOutput {
+  id: string
+  reason: string // new short status line, same flavor as existing rule-based reasons
+  newMemory: string | null // a short memory sentence to store, or null if nothing memorable happened
+  newMood: string | null // updated mood (single word/short phrase), or null to keep current mood
+}
+
+export interface TickResponse {
+  results: TickResidentOutput[]
+}
+===== E:\WebProj\RandomResident\lib\tick\buildPrompt.ts =====
+import { TickResidentInput } from './types'
+
+export function buildTickPrompt(residents: TickResidentInput[]): string {
+  return `You control the inner lives of ${residents.length} simulated characters in a cozy life-sim game, similar in tone to Tomodachi Life. For each character below, decide what they're doing right now and write ONE short status line (under 12 words, casual, third-person, like "is debating whether pineapple belongs on pizza").
+
+If a character has pending topics, they should react to/think about ONE of those topics in their status line and optionally form a new memory about it. If a character has no pending topics, give them a plausible idle/social status line based on their personality and mood — keep it light and varied.
+
+A character's likes/dislikes should influence their reaction if a topic relates to food. Sociability affects how social their status line is (high = mentions others, low = solo activity). Energy affects tone (high = excited/active, low = mellow/relaxed).
+
+Only set newMemory if something notable happened this tick (e.g. discussed a topic, had a strong reaction) — otherwise use null. Only set newMood if their mood should shift — otherwise use null. Keep moods to a single word or short phrase (e.g. "happy", "annoyed", "curious", "content").
+
+Characters:
+${JSON.stringify(residents, null, 2)}
+
+Respond ONLY with valid JSON matching this exact shape, no other text, no markdown code fences:
+{"results": [{"id": "...", "reason": "...", "newMemory": "..." | null, "newMood": "..." | null}]}`
+}
+===== E:\WebProj\RandomResident\lib\tick\groqClient.ts =====
+import { TickResponse } from './types'
+
+export async function callGroqTick(prompt: string): Promise<TickResponse> {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.9,
+      response_format: { type: 'json_object' },
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Groq API error (${response.status}): ${errText}`)
+  }
+
+  const data = await response.json()
+  const content = data.choices?.[0]?.message?.content
+  if (!content) {
+    throw new Error('Groq response missing content')
+  }
+
+  let parsed: TickResponse
+  try {
+    parsed = JSON.parse(content)
+  } catch (e) {
+    throw new Error(`Failed to parse Groq JSON response: ${content}`)
+  }
+
+  if (!Array.isArray(parsed.results)) {
+    throw new Error('Groq response missing results array')
+  }
+
+  return parsed
+}
+===== E:\WebProj\RandomResident\lib\types.ts =====
+export interface Position {
+  x: number
+  y: number
+}
+
+export type Gender = 'male' | 'female' | 'unspecified'
+
+export type IntentType = 'idle' | 'wander' | 'seek_resident'
+
+export interface Intent {
+  type: IntentType
+  reason: string
+  target: Position
+  targetResidentId?: string
+  startedAt: number // Date.now() when intent was chosen
+  duration: number // ms this intent should last before re-deciding
+}
+
+export interface Traits {
+  sociability: number // 0-1, higher = more likely to seek other residents
+  energy: number // 0-1, higher = shorter idle periods, faster movement
+}
+
+export const FOOD_CATALOG = [
+  'pizza',
+  'sushi',
+  'ramen',
+  'curry',
+  'tacos',
+  'burgers',
+  'salad',
+  'ice cream',
+  'chocolate',
+  'spicy food',
+  'seafood',
+  'natto',
+  'durian',
+  'cheese',
+  'pickles',
+  'mushrooms',
+  'tofu',
+  'dumplings',
+  'pasta',
+  'barbecue',
+] as const
+
+export interface Resident {
+  id: string
+  owner_id: string // auth user who created this resident
+  name: string
+  color: string
+  photo_url?: string | null // user's uploaded photo, if available
+  gender: Gender
+  likes: string[]
+  dislikes: string[]
+  mood: string
+  ai_reason?: string | null // AI-generated reason from last tick
+  ai_reason_set_at?: string | null // timestamp of when ai_reason was set
+  position: Position
+  intent: Intent
+  traits: Traits
+}
+
+export interface Memory {
+  id: string
+  resident_id: string
+  content: string
+  created_at: string
+}
+
+export interface Topic {
+  id: string
+  resident_id: string
+  submitted_by: string
+  topic_text: string
+  used: boolean
+  created_at: string
+}
+
+export const ROOM_BOUNDS = { width: 800, height: 500 }
+export const AVATAR_SIZE = 48 // px diameter
+export const AVATAR_RADIUS = AVATAR_SIZE / 2 // 24
+export const MIN_DISTANCE = AVATAR_SIZE // sum of two radii — circles must stay this far apart
+export const SOCIAL_DISTANCE = AVATAR_SIZE * 1.5 // desired gap when "hanging out" with someone
+export const ARRIVAL_THRESHOLD = 4 // px — close enough to target counts as "arrived"
+
+export function speedFor(traits: Traits): number {
+  // px per second
+  return 30 + traits.energy * 60
+}
+===== E:\WebProj\RandomResident\lib\simulation.ts =====
+import { Resident, Intent, Position, ROOM_BOUNDS, AVATAR_SIZE, AVATAR_RADIUS, SOCIAL_DISTANCE, MIN_DISTANCE } from './types'
+
+export function hasRecentAIReason(resident: Resident): boolean {
+  if (!resident.ai_reason || !resident.ai_reason_set_at) {
+    return false
+  }
+  const aiReasonTime = new Date(resident.ai_reason_set_at).getTime()
+  const intentStartTime = resident.intent.startedAt
+  return aiReasonTime > intentStartTime
+}
+
+export function clampToRoom(pos: Position): Position {
+  return {
+    x: Math.min(Math.max(pos.x, AVATAR_RADIUS), ROOM_BOUNDS.width - AVATAR_RADIUS),
+    y: Math.min(Math.max(pos.y, AVATAR_RADIUS), ROOM_BOUNDS.height - AVATAR_RADIUS),
+  }
+}
+
+export function resolveCollisions(residents: Resident[]): void {
+  for (let i = 0; i < residents.length; i++) {
+    for (let j = i + 1; j < residents.length; j++) {
+      const a = residents[i]
+      const b = residents[j]
+
+      let dx = b.position.x - a.position.x
+      let dy = b.position.y - a.position.y
+      let distance = Math.sqrt(dx * dx + dy * dy)
+
+      // Handle zero distance (overlapping at same point)
+      if (distance === 0) {
+        dx = 0.01
+        dy = 0.01
+        distance = Math.sqrt(dx * dx + dy * dy)
+      }
+
+      if (distance < MIN_DISTANCE) {
+        const overlap = MIN_DISTANCE - distance
+        const nx = dx / distance
+        const ny = dy / distance
+
+        a.position.x -= (nx * overlap) / 2
+        a.position.y -= (ny * overlap) / 2
+        b.position.x += (nx * overlap) / 2
+        b.position.y += (ny * overlap) / 2
+
+        a.position = clampToRoom(a.position)
+        b.position = clampToRoom(b.position)
+      }
+    }
+  }
+}
+
+export function randomPointInRoom(): Position {
+  const margin = AVATAR_SIZE / 2
+  return {
+    x: Math.random() * (ROOM_BOUNDS.width - margin * 2) + margin,
+    y: Math.random() * (ROOM_BOUNDS.height - margin * 2) + margin,
+  }
+}
+
+export function decideNextIntent(
+  resident: Resident,
+  allResidents: Resident[],
+  now: number
+): Intent {
+  const roll = Math.random()
+  const seekThreshold = resident.traits.sociability * 0.5 // Seek if roll < sociability * 0.5
+
+  // Seek resident
+  if (roll < seekThreshold && allResidents.length > 1) {
+    const others = allResidents.filter((r) => r.id !== resident.id)
+    const targetResident = others[Math.floor(Math.random() * others.length)]
+
+    const energyFactor = 1 + resident.traits.energy
+    const duration = (4000 + Math.random() * 4000) / energyFactor
+
+    // Compute a point at SOCIAL_DISTANCE from the target resident at a random angle
+    const angle = Math.random() * Math.PI * 2
+    let target: Position = {
+      x: targetResident.position.x + Math.cos(angle) * SOCIAL_DISTANCE,
+      y: targetResident.position.y + Math.sin(angle) * SOCIAL_DISTANCE,
+    }
+    target = clampToRoom(target)
+
+    return {
+      type: 'seek_resident',
+      reason: `wants to hang out with ${targetResident.name}`,
+      target,
+      targetResidentId: targetResident.id,
+      startedAt: now,
+      duration,
+    }
+  }
+
+  // Wander or idle
+  const wanderThreshold = seekThreshold + resident.traits.energy * 0.3 // 30% of energy scale
+
+  if (roll < wanderThreshold) {
+    // Wander
+    const reasons = [
+      'feels like wandering around',
+      'is exploring a bit',
+      "wants to stretch their legs",
+      'is looking for something to do',
+    ]
+    const reason = reasons[Math.floor(Math.random() * reasons.length)]
+
+    return {
+      type: 'wander',
+      reason,
+      target: clampToRoom(randomPointInRoom()),
+      startedAt: now,
+      duration: 3000 + Math.random() * 3000,
+    }
+  }
+
+  // Idle
+  const idleReasons = [
+    'is taking a break',
+    'is daydreaming',
+    'is just vibing',
+    'is people-watching',
+  ]
+  const idleReason = hasRecentAIReason(resident) ? resident.ai_reason : idleReasons[Math.floor(Math.random() * idleReasons.length)]
+
+  return {
+    type: 'idle',
+    reason: idleReason!,
+    target: { ...resident.position },
+    startedAt: now,
+    duration: 2000 + Math.random() * 3000,
+  }
+}
+===== E:\WebProj\RandomResident\lib\residentStore.ts =====
+import { create } from 'zustand'
+import { Resident, Position, Gender, ARRIVAL_THRESHOLD, speedFor } from './types'
+import { decideNextIntent, randomPointInRoom, clampToRoom, resolveCollisions } from './simulation'
+import type { ResidentRow } from './supabase/types'
+
+interface ResidentStore {
+  residents: Resident[]
+  loadResidents: (rows: ResidentRow[]) => void
+  addResident: (row: ResidentRow) => void
+  removeResident: (id: string) => void
+  updateResidentIdentity: (id: string, updates: { name?: string; photo_url?: string | null; color?: string; gender?: Gender; likes?: string[]; dislikes?: string[] }) => void
+  updateResidentPosition: (id: string, position: Position) => void
+  simulateStep: (dt: number) => void
+}
+
+export const useResidentStore = create<ResidentStore>((set) => ({
+  residents: [],
+
+  loadResidents: (rows: ResidentRow[]) => {
+    let loadedResidents = rows.map((row) => {
+      const now = Date.now()
+      return {
+        id: row.id,
+        owner_id: row.owner_id,
+        name: row.name,
+        color: row.color,
+        photo_url: row.photo_url,
+        gender: row.gender,
+        likes: row.likes,
+        dislikes: row.dislikes,
+        mood: row.mood,
+        ai_reason: row.ai_reason,
+        ai_reason_set_at: row.ai_reason_set_at,
+        position: randomPointInRoom(),
+        intent: {
+          type: 'idle' as const,
+          reason: 'is settling in',
+          target: randomPointInRoom(),
+          startedAt: now,
+          duration: 1000 + Math.random() * 2000,
+        },
+        traits: {
+          sociability: row.sociability,
+          energy: row.energy,
+        },
+      } as Resident
+    })
+
+    // Resolve collisions on initial load
+    resolveCollisions(loadedResidents)
+
+    set({ residents: loadedResidents })
+  },
+
+  addResident: (row: ResidentRow) => {
+    set((state) => {
+      const now = Date.now()
+      const newResident: Resident = {
+        id: row.id,
+        owner_id: row.owner_id,
+        gender: row.gender,
+        likes: row.likes,
+        dislikes: row.dislikes,
+        mood: row.mood,
+        ai_reason: row.ai_reason,
+        ai_reason_set_at: row.ai_reason_set_at,
+        name: row.name,
+        color: row.color,
+        photo_url: row.photo_url,
+        position: randomPointInRoom(),
+        intent: {
+          type: 'idle',
+          reason: 'is settling in',
+          target: randomPointInRoom(),
+          startedAt: now,
+          duration: 1000 + Math.random() * 2000,
+        },
+        traits: {
+          sociability: row.sociability,
+          energy: row.energy,
+        },
+      }
+
+      const updatedResidents = [...state.residents, newResident]
+      resolveCollisions(updatedResidents)
+      return { residents: updatedResidents }
+    })
+  },
+
+  removeResident: (id: string) => {
+    set((state) => ({
+      residents: state.residents.filter((r) => r.id !== id),
+    }))
+  },
+
+  updateResidentIdentity: (
+    id: string,
+    updates: {
+      name?: string
+      photo_url?: string | null
+      color?: string
+      gender?: Gender
+      likes?: string[]
+      dislikes?: string[]
+    }
+  ) => {
+    set((state) => ({
+      residents: state.residents.map((resident) =>
+        resident.id === id
+          ? {
+              ...resident,
+              ...(updates.name !== undefined && { name: updates.name }),
+              ...(updates.photo_url !== undefined && { photo_url: updates.photo_url }),
+              ...(updates.color !== undefined && { color: updates.color }),
+              ...(updates.gender !== undefined && { gender: updates.gender }),
+              ...(updates.likes !== undefined && { likes: updates.likes }),
+              ...(updates.dislikes !== undefined && { dislikes: updates.dislikes }),
+            }
+          : resident
+      ),
+    }))
+  },
+
+  updateResidentPosition: (id: string, position: Position) => {
+    set((state) => ({
+      residents: state.residents.map((resident) =>
+        resident.id === id ? { ...resident, position } : resident
+      ),
+    }))
+  },
+
+  simulateStep: (dt: number) => {
+    set((state) => {
+      const now = Date.now()
+      let updatedResidents = state.residents.map((resident) => {
+        const timeSinceStart = now - resident.intent.startedAt
+
+        // Check if intent duration exceeded
+        if (timeSinceStart >= resident.intent.duration) {
+          const nextIntent = decideNextIntent(resident, state.residents, now)
+          return {
+            ...resident,
+            intent: nextIntent,
+            position: resident.position, // Keep current position
+          }
+        }
+
+        // Handle wander/seek_resident movement
+        if (
+          resident.intent.type === 'wander' ||
+          resident.intent.type === 'seek_resident'
+        ) {
+          const dx = resident.intent.target.x - resident.position.x
+          const dy = resident.intent.target.y - resident.position.y
+          const distanceToTarget = Math.sqrt(dx * dx + dy * dy)
+
+          // Check if arrived
+          if (distanceToTarget <= ARRIVAL_THRESHOLD) {
+            return resident // Stay at target
+          }
+
+          // Move toward target
+          const speed = speedFor(resident.traits)
+          const moveDistance = speed * dt
+
+          if (moveDistance >= distanceToTarget) {
+            // Snap to target to avoid overshooting
+            return {
+              ...resident,
+              position: resident.intent.target,
+            }
+          }
+
+          // Move by moveDistance toward target
+          const nx = dx / distanceToTarget
+          const ny = dy / distanceToTarget
+          return {
+            ...resident,
+            position: {
+              x: resident.position.x + nx * moveDistance,
+              y: resident.position.y + ny * moveDistance,
+            },
+          }
+        }
+
+        // Idle - no position change
+        return resident
+      })
+
+      // Resolve collisions
+      resolveCollisions(updatedResidents)
+
+      // Clamp all positions to room bounds
+      updatedResidents = updatedResidents.map((resident) => ({
+        ...resident,
+        position: clampToRoom(resident.position),
+      }))
+
+      return { residents: updatedResidents }
+    })
+  },
+}))
+===== E:\WebProj\RandomResident\lib\auth.ts =====
+'use client'
+
+import { useEffect, useState } from 'react'
+import { User } from '@supabase/supabase-js'
+import { supabase } from './supabase/client'
+
+export function useAuth(): {
+  user: User | null
+  loading: boolean
+} {
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const getSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        setUser(data.session?.user ?? null)
+      } catch (error) {
+        console.error('Failed to get session:', error)
+        setUser(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    getSession()
+
+    // Subscribe to auth state changes
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null)
+      }
+    )
+
+    // Clean up subscription on unmount
+    return () => {
+      authListener?.subscription.unsubscribe()
+    }
+  }, [])
+
+  return { user, loading }
+}
+===== E:\WebProj\RandomResident\lib\realtime.ts =====
+import { supabase } from './supabase/client'
+import { RealtimeChannel } from '@supabase/supabase-js'
+
+export function createWorldChannels(
+  onPositionUpdate: (residentId: string, x: number, y: number) => void,
+  onResidentInsert: (row: any) => void,
+  onResidentUpdate: (row: any) => void,
+  onResidentDelete: (id: string) => void,
+): { positionChannel: RealtimeChannel; identityChannel: RealtimeChannel } {
+  const positionChannel = supabase
+    .channel('world-positions')
+    .on('broadcast', { event: 'position' }, ({ payload }) => {
+      onPositionUpdate(payload.residentId, payload.x, payload.y)
+    })
+    .subscribe()
+
+  const identityChannel = supabase
+    .channel('world-identity')
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'residents' },
+      ({ new: row }) => onResidentInsert(row),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'residents' },
+      ({ new: row }) => onResidentUpdate(row),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'residents' },
+      ({ old: row }) => onResidentDelete(row.id),
+    )
+    .subscribe()
+
+  return { positionChannel, identityChannel }
+}
+===== E:\WebProj\RandomResident\lib\memoriesStore.ts =====
+'use client'
+
+import { create } from 'zustand'
+import { Memory } from './types'
+
+interface MemoriesStore {
+  memoriesByResident: Record<string, Memory[]>
+  loadMemories: (residentId: string, memories: Memory[]) => void
+}
+
+export const useMemoriesStore = create<MemoriesStore>((set) => ({
+  memoriesByResident: {},
+
+  loadMemories: (residentId: string, memories: Memory[]) => {
+    set((state) => ({
+      memoriesByResident: {
+        ...state.memoriesByResident,
+        [residentId]: memories,
+      },
+    }))
+  },
+}))
+===== E:\WebProj\RandomResident\lib\topicsStore.ts =====
+'use client'
+
+import { create } from 'zustand'
+import { Topic } from './types'
+
+interface TopicsStore {
+  topicsByResident: Record<string, Topic[]>
+  loadTopics: (residentId: string, topics: Topic[]) => void
+  addTopic: (topic: Topic) => void
+}
+
+export const useTopicsStore = create<TopicsStore>((set) => ({
+  topicsByResident: {},
+
+  loadTopics: (residentId: string, topics: Topic[]) => {
+    set((state) => ({
+      topicsByResident: {
+        ...state.topicsByResident,
+        [residentId]: topics,
+      },
+    }))
+  },
+
+  addTopic: (topic: Topic) => {
+    set((state) => ({
+      topicsByResident: {
+        ...state.topicsByResident,
+        [topic.resident_id]: [...(state.topicsByResident[topic.resident_id] || []), topic],
+      },
+    }))
+  },
+}))
+===== E:\WebProj\RandomResident\components\ResidentAvatar.tsx =====
+'use client'
+
+import { Resident, AVATAR_SIZE } from '@/lib/types'
+import { useTopicsStore } from '@/lib/topicsStore'
+
+interface ResidentAvatarProps {
+  resident: Resident
+  onAvatarClick: () => void
+}
+
+export default function ResidentAvatar({ resident, onAvatarClick }: ResidentAvatarProps) {
+  const { topicsByResident } = useTopicsStore()
+  const pendingTopics = topicsByResident[resident.id] || []
+  const hasPendingTopics = pendingTopics.length > 0
+
+  return (
+    <div
+      className="absolute"
+      style={{
+        x: resident.position.x - AVATAR_SIZE / 2,
+        y: resident.position.y - AVATAR_SIZE / 2,
+        transform: `translate(${resident.position.x - AVATAR_SIZE / 2}px, ${resident.position.y - AVATAR_SIZE / 2}px)`,
+      }}
+    >
+      {/* Reason bubble */}
+      <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 transform whitespace-nowrap rounded-full bg-black/75 px-3 py-1 text-xs text-white">
+        {resident.intent.reason}
+      </div>
+
+      {/* Avatar circle */}
+      <div
+        onClick={onAvatarClick}
+        className="flex cursor-pointer items-center justify-center rounded-full shadow-md transition-transform hover:scale-110"
+        style={{
+          width: AVATAR_SIZE,
+          height: AVATAR_SIZE,
+          backgroundColor: resident.color,
+          backgroundImage: resident.photo_url
+            ? `url(${resident.photo_url})`
+            : undefined,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      >
+        {/* Topic indicator badge */}
+        {hasPendingTopics && (
+          <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-xs font-bold text-gray-800">
+            💭
+          </div>
+        )}
+
+        {/* Name label */}
+        <div className="absolute top-full mt-1 text-center text-xs font-semibold text-gray-800">
+          {resident.name}
+        </div>
+      </div>
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\WorldView.tsx =====
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { useAnimationFrame } from 'framer-motion'
+import { ROOM_BOUNDS } from '@/lib/types'
+import { useResidentStore } from '@/lib/residentStore'
+import { supabase } from '@/lib/supabase/client'
+import { createWorldChannels } from '@/lib/realtime'
+import ResidentAvatar from './ResidentAvatar'
+import TopicModal from './TopicModal'
+
+export default function WorldView() {
+  const { residents, loadResidents, simulateStep, addResident, removeResident, updateResidentIdentity, updateResidentPosition } = useResidentStore()
+  const [user, setUser] = useState<any>(null)
+  const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null)
+  const positionChannelRef = useRef<any>(null)
+  const identityChannelRef = useRef<any>(null)
+  const residentsRef = useRef(residents)
+  const lastBroadcast = useRef(0)
+
+  // Fetch current user and load initial residents
+  useEffect(() => {
+    const fetchUserAndResidents = async () => {
+      const { data: { user: sessionUser } } = await supabase.auth.getUser()
+      if (sessionUser) {
+        setUser(sessionUser)
+      }
+
+      const { data } = await supabase.from('residents').select('*')
+      if (data) {
+        loadResidents(data)
+      }
+    }
+
+    fetchUserAndResidents()
+  }, [loadResidents])
+
+  // Keep residentsRef in sync with residents state
+  useEffect(() => {
+    residentsRef.current = residents
+  }, [residents])
+
+  // Set up realtime channels — only re-run when user changes
+  useEffect(() => {
+    if (!user) return
+
+    const { positionChannel, identityChannel } = createWorldChannels(
+      // onPositionUpdate — only apply to residents we DON'T own
+      (residentId, x, y) => {
+        const resident = residentsRef.current.find(r => r.id === residentId)
+        if (resident && resident.owner_id !== user.id) {
+          updateResidentPosition(residentId, { x, y })
+        }
+      },
+      // onResidentInsert
+      (row) => addResident(row),
+      // onResidentUpdate
+      (row) => updateResidentIdentity(row.id, { name: row.name, photo_url: row.photo_url }),
+      // onResidentDelete
+      (id) => removeResident(id),
+    )
+
+    positionChannelRef.current = positionChannel
+    identityChannelRef.current = identityChannel
+
+    return () => {
+      supabase.removeChannel(positionChannel)
+      supabase.removeChannel(identityChannel)
+    }
+  }, [user])
+
+  useAnimationFrame((time, delta) => {
+    simulateStep(delta / 1000) // delta is in ms, convert to seconds
+
+    // Broadcast positions for owned residents, throttled to once per second
+    if (user && positionChannelRef.current && time - lastBroadcast.current > 1000) {
+      lastBroadcast.current = time
+      const myResidents = residents.filter(r => r.owner_id === user.id)
+      myResidents.forEach(r => {
+        positionChannelRef.current.send({
+          type: 'broadcast',
+          event: 'position',
+          payload: { residentId: r.id, x: r.position.x, y: r.position.y }
+        })
+      })
+    }
+  })
+
+  return (
+    <div
+      className="relative rounded-lg border-2 border-gray-300 bg-gray-50 shadow-lg"
+      style={{
+        width: ROOM_BOUNDS.width,
+        height: ROOM_BOUNDS.height,
+      }}
+    >
+      {residents.map((resident) => (
+        <ResidentAvatar
+          key={resident.id}
+          resident={resident}
+          onAvatarClick={() => setSelectedResidentId(resident.id)}
+        />
+      ))}
+
+      {selectedResidentId && user && (
+        <TopicModal
+          residentId={selectedResidentId}
+          residentName={residents.find(r => r.id === selectedResidentId)?.name || 'Unknown'}
+          userId={user.id}
+          onClose={() => setSelectedResidentId(null)}
+        />
+      )}
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\ResidentEditorPanel.tsx =====
+'use client'
+
+import { useState, ChangeEvent, FormEvent } from 'react'
+import { User } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase/client'
+import { useResidentStore } from '@/lib/residentStore'
+import { AVATAR_SIZE, Gender, FOOD_CATALOG } from '@/lib/types'
+
+interface ResidentEditorPanelProps {
+  user: User
+}
+
+const RESIDENT_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#95E1D3']
+
+function randomFromPalette(): string {
+  return RESIDENT_COLORS[Math.floor(Math.random() * RESIDENT_COLORS.length)]
+}
+
+export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editGender, setEditGender] = useState<Gender>('unspecified')
+  const [editLikes, setEditLikes] = useState<string[]>([])
+  const [editDislikes, setEditDislikes] = useState<string[]>([])
+  const [isSavingName, setIsSavingName] = useState(false)
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false)
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const { residents, updateResidentIdentity, addResident, removeResident } = useResidentStore()
+  const myResidents = residents.filter(r => r.owner_id === user.id)
+  const canAddResident = myResidents.length < 5
+
+  const handleOpenPanel = () => {
+    setIsOpen(true)
+  }
+
+  const handleSaveName = async (e: FormEvent, residentId: string) => {
+    e.preventDefault()
+    if (!editName.trim()) {
+      setError('Name cannot be empty')
+      return
+    }
+
+    setIsSavingName(true)
+    setError(null)
+
+    try {
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ name: editName })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      updateResidentIdentity(residentId, { name: editName })
+      setEditingId(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save name')
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  const handleSavePreferences = async (residentId: string) => {
+    setIsSavingPreferences(true)
+    setError(null)
+
+    try {
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ gender: editGender, likes: editLikes, dislikes: editDislikes })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      updateResidentIdentity(residentId, { gender: editGender, likes: editLikes, dislikes: editDislikes })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save preferences')
+    } finally {
+      setIsSavingPreferences(false)
+    }
+  }
+
+  const toggleLike = (food: string) => {
+    if (editLikes.includes(food)) {
+      setEditLikes(editLikes.filter(f => f !== food))
+    } else if (editLikes.length < 3) {
+      setEditLikes([...editLikes, food])
+    }
+  }
+
+  const toggleDislike = (food: string) => {
+    if (editDislikes.includes(food)) {
+      setEditDislikes(editDislikes.filter(f => f !== food))
+    } else if (editDislikes.length < 3) {
+      setEditDislikes([...editDislikes, food])
+    }
+  }
+
+  const handlePhotoUpload = async (e: ChangeEvent<HTMLInputElement>, residentId: string) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setIsUploadingPhoto(true)
+    setError(null)
+
+    try {
+      // Get file extension
+      const ext = file.name.split('.').pop() || 'png'
+      const filePath = `${user.id}/${residentId}/avatar.${ext}`
+
+      // Upload to storage
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file, { upsert: true })
+
+      if (uploadError) throw uploadError
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath)
+
+      const photoUrl = urlData.publicUrl
+
+      // Update database
+      const { error: updateError } = await supabase
+        .from('residents')
+        .update({ photo_url: photoUrl })
+        .eq('id', residentId)
+
+      if (updateError) throw updateError
+
+      // Update local store immediately
+      updateResidentIdentity(residentId, { photo_url: photoUrl })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload photo')
+    } finally {
+      setIsUploadingPhoto(false)
+      // Reset file input
+      if (e.target) {
+        e.target.value = ''
+      }
+    }
+  }
+
+  const handleDeleteResident = async (residentId: string) => {
+    if (!confirm('Are you sure you want to delete this resident?')) return
+
+    setError(null)
+    try {
+      const { error: deleteError } = await supabase
+        .from('residents')
+        .delete()
+        .eq('id', residentId)
+
+      if (deleteError) throw deleteError
+
+      removeResident(residentId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete resident')
+    }
+  }
+
+  const handleAddResident = async () => {
+    if (!canAddResident) return
+
+    setIsCreating(true)
+    setError(null)
+
+    try {
+      const color = randomFromPalette()
+      const { data, error: insertError } = await supabase
+        .from('residents')
+        .insert({ owner_id: user.id, name: 'New Resident', color })
+        .select()
+        .single()
+
+      if (insertError) throw insertError
+
+      if (data) {
+        addResident(data)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create resident')
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50">
+      {/* Toggle Button */}
+      <button
+        onClick={handleOpenPanel}
+        className="mb-4 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors"
+      >
+        My Residents ({myResidents.length}/5)
+      </button>
+
+      {/* Slide-in Panel */}
+      {isOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}>
+          <div
+            className="fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl overflow-y-auto transform transition-transform"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '100%' }}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Error Message */}
+              {error && (
+                <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              {/* Residents List */}
+              {myResidents.length === 0 ? (
+                <p className="text-gray-600 text-sm">No residents yet. Create one to get started!</p>
+              ) : (
+                <div className="space-y-4">
+                  {myResidents.map((resident) => (
+                    <div key={resident.id} className="border border-gray-200 rounded-lg p-4">
+                      {/* Resident Header */}
+                      <div className="flex items-center gap-4 mb-4">
+                        <div
+                          className="flex-shrink-0 rounded-full"
+                          style={{
+                            width: AVATAR_SIZE,
+                            height: AVATAR_SIZE,
+                            backgroundColor: resident.color,
+                            backgroundImage: resident.photo_url
+                              ? `url(${resident.photo_url})`
+                              : undefined,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }}
+                        />
+                        <div className="flex-grow">
+                          {editingId === resident.id ? (
+                            <form onSubmit={(e) => handleSaveName(e, resident.id)} className="space-y-2">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                placeholder="Resident name"
+                                className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                                autoFocus
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={isSavingName}
+                                  className="flex-1 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm font-medium py-1 transition-colors"
+                                >
+                                  {isSavingName ? 'Saving...' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingId(null)}
+                                  className="flex-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div>
+                              <p className="font-medium text-gray-800">{resident.name}</p>
+                              <button
+                                onClick={() => {
+                                  setEditingId(resident.id)
+                                  setEditName(resident.name)
+                                  setEditGender(resident.gender)
+                                  setEditLikes(resident.likes)
+                                  setEditDislikes(resident.dislikes)
+                                }}
+                                className="text-xs text-blue-500 hover:text-blue-700"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDeleteResident(resident.id)}
+                          className="text-red-500 hover:text-red-700 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Photo Upload */}
+                      {editingId === resident.id && (
+                        <div className="border-t pt-4 space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Upload Photo
+                            </label>
+                            <label className="block">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handlePhotoUpload(e, resident.id)}
+                                disabled={isUploadingPhoto}
+                                className="hidden"
+                              />
+                              <div className="w-full rounded border-2 border-dashed border-gray-300 hover:border-blue-400 px-3 py-3 text-center cursor-pointer transition-colors">
+                                {isUploadingPhoto ? (
+                                  <p className="text-xs text-gray-600">Uploading...</p>
+                                ) : (
+                                  <p className="text-xs text-gray-600">
+                                    Click to choose image
+                                  </p>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+
+                          {/* Gender Selector */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Gender
+                            </label>
+                            <select
+                              value={editGender}
+                              onChange={(e) => setEditGender(e.target.value as Gender)}
+                              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                            >
+                              <option value="unspecified">Unspecified</option>
+                              <option value="female">Female</option>
+                              <option value="male">Male</option>
+                            </select>
+                          </div>
+
+                          {/* Likes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Likes ({editLikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`like-${food}`}
+                                  onClick={() => toggleLike(food)}
+                                  disabled={editLikes.length >= 3 && !editLikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editLikes.includes(food)
+                                      ? 'bg-green-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Dislikes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Dislikes ({editDislikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`dislike-${food}`}
+                                  onClick={() => toggleDislike(food)}
+                                  disabled={editDislikes.length >= 3 && !editDislikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editDislikes.includes(food)
+                                      ? 'bg-red-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Save Preferences Button */}
+                          <button
+                            onClick={() => handleSavePreferences(resident.id)}
+                            disabled={isSavingPreferences}
+                            className="w-full rounded bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white text-sm font-medium py-2 transition-colors"
+                          >
+                            {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Resident Button */}
+              <div>
+                <button
+                  onClick={handleAddResident}
+                  disabled={!canAddResident || isCreating}
+                  className="w-full rounded bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+                >
+                  {isCreating ? 'Creating...' : '+ Add Resident'}
+                </button>
+                {!canAddResident && (
+                  <p className="text-xs text-gray-500 text-center mt-2">
+                    5 resident limit reached
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\MainContent.tsx =====
+'use client'
+
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/lib/auth'
+import { supabase } from '@/lib/supabase/client'
+import WorldView from './WorldView'
+import ResidentEditorPanel from './ResidentEditorPanel'
+
+export default function MainContent() {
+  const { user, loading } = useAuth()
+  const router = useRouter()
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4">
+        <p className="text-gray-700 text-lg">
+          You need to sign in to enter the living room.
+        </p>
+        <Link
+          href="/login"
+          className="rounded bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 transition-colors"
+        >
+          Go to Sign In
+        </Link>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={handleSignOut}
+        className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-800 font-medium z-40"
+      >
+        Sign Out
+      </button>
+      <WorldView />
+      <ResidentEditorPanel user={user} />
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\components\TopicModal.tsx =====
+'use client'
+
+import { useState, FormEvent } from 'react'
+import { supabase } from '@/lib/supabase/client'
+import { useTopicsStore } from '@/lib/topicsStore'
+
+interface TopicModalProps {
+  residentId: string
+  residentName: string
+  userId: string
+  onClose: () => void
+}
+
+export default function TopicModal({ residentId, residentName, userId, onClose }: TopicModalProps) {
+  const [topicText, setTopicText] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [confirmation, setConfirmation] = useState(false)
+  const { addTopic } = useTopicsStore()
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!topicText.trim()) return
+
+    setIsLoading(true)
+
+    try {
+      const { data, error } = await supabase
+        .from('topics')
+        .insert({
+          resident_id: residentId,
+          submitted_by: userId,
+          topic_text: topicText,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      addTopic(data)
+      setConfirmation(true)
+      setTopicText('')
+
+      // Close modal after showing confirmation
+      setTimeout(() => {
+        onClose()
+      }, 1500)
+    } catch (err) {
+      console.error('Failed to submit topic:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-96 rounded-lg bg-white p-6 shadow-lg">
+        <h2 className="mb-4 text-xl font-bold">Talk to {residentName}</h2>
+
+        {confirmation ? (
+          <div className="text-center">
+            <p className="text-lg font-semibold text-green-600">
+              ✓ {residentName} will hear about it
+            </p>
+            <p className="mt-2 text-sm text-gray-600">Topic queued for discussion</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <textarea
+              value={topicText}
+              onChange={(e) => setTopicText(e.target.value.slice(0, 100))}
+              placeholder="What should they talk about?"
+              maxLength={100}
+              className="mb-2 w-full rounded border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              rows={4}
+            />
+            <div className="mb-4 text-xs text-gray-500">
+              {topicText.length}/100 characters
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 rounded bg-gray-300 px-4 py-2 font-semibold hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!topicText.trim() || isLoading}
+                className="flex-1 rounded bg-blue-500 px-4 py-2 font-semibold text-white hover:bg-blue-600 disabled:bg-gray-400"
+              >
+                {isLoading ? 'Sending...' : 'Send'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+===== E:\WebProj\RandomResident\app\login\page.tsx =====
+'use client'
+
+import { FormEvent, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase/client'
+
+const COLOR_PALETTE = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#95E1D3', '#F38181', '#AA96DA', '#FCBAD3']
+
+export default function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
+
+  const getRandomColor = () => COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)]
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setLoading(true)
+
+    try {
+      if (isSignUp) {
+        // Sign up
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+        })
+
+        if (signUpError) throw signUpError
+
+        if (data.user) {
+          // Insert resident row
+          const { error: insertError } = await supabase.from('residents').insert({
+            owner_id: data.user.id,
+            name: email.split('@')[0],
+            color: getRandomColor(),
+          })
+
+          if (insertError) {
+            // Auth account exists but resident creation failed — surface this
+            // clearly rather than a generic error, since the user technically
+            // has an account now
+            throw new Error(
+              `Account created, but we couldn't set up your first resident: ${insertError.message}. Try signing in — you can add a resident from the panel.`
+            )
+          }
+        }
+      } else {
+        // Sign in
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        })
+
+        if (signInError) throw signInError
+      }
+
+      // Redirect to home
+      router.push('/')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-indigo-100 p-4">
+      <div className="w-full max-w-md rounded-lg bg-white shadow-lg p-8">
+        <h1 className="mb-2 text-2xl font-bold text-gray-800">
+          {isSignUp ? 'Create Account' : 'Sign In'}
+        </h1>
+        <p className="mb-6 text-gray-600">
+          {isSignUp ? 'Join the living room' : 'Welcome back'}
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+          >
+            {loading
+              ? isSignUp
+                ? 'Creating account...'
+                : 'Signing in...'
+              : isSignUp
+              ? 'Sign Up'
+              : 'Sign In'}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <p className="text-gray-600 text-sm">
+            {isSignUp ? 'Already have an account?' : "Don't have an account?"}
+          </p>
+          <button
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="text-blue-500 hover:text-blue-700 font-medium text-sm mt-2"
+          >
+            {isSignUp ? 'Sign In' : 'Sign Up'}
+          </button>
+        </div>
+      </div>
+    </main>
+  )
+}
+===== E:\WebProj\RandomResident\app\api\tick\route.ts =====
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase/server'
+import { buildTickPrompt } from '@/lib/tick/buildPrompt'
+import { callGroqTick } from '@/lib/tick/groqClient'
+import { TickResidentInput } from '@/lib/tick/types'
+
+const BATCH_SIZE = 20
+const MAX_MEMORIES = 10
+
+export async function GET(req: NextRequest) {
+  // Auth check
+  const authHeader = req.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.TICK_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    // 1. Fetch the oldest-ticked residents, up to BATCH_SIZE
+    const { data: residents, error: residentsError } = await supabaseAdmin
+      .from('residents')
+      .select('*')
+      .order('last_ticked_at', { ascending: true })
+      .limit(BATCH_SIZE)
+
+    if (residentsError) throw residentsError
+    if (!residents || residents.length === 0) {
+      return NextResponse.json({ message: 'No residents to process' })
+    }
+
+    const residentIds = residents.map((r) => r.id)
+
+    // 2. Fetch recent memories for these residents (up to MAX_MEMORIES each)
+    const { data: allMemories, error: memError } = await supabaseAdmin
+      .from('memories')
+      .select('*')
+      .in('resident_id', residentIds)
+      .order('created_at', { ascending: false })
+
+    if (memError) throw memError
+
+    const memoriesByResident = new Map<string, string[]>()
+    for (const mem of allMemories || []) {
+      const list = memoriesByResident.get(mem.resident_id) || []
+      if (list.length < MAX_MEMORIES) {
+        list.push(mem.content)
+      }
+      memoriesByResident.set(mem.resident_id, list)
+    }
+
+    // 3. Fetch pending topics for these residents
+    const { data: topics, error: topicError } = await supabaseAdmin
+      .from('topics')
+      .select('*')
+      .in('resident_id', residentIds)
+      .eq('used', false)
+
+    if (topicError) throw topicError
+
+    const topicsByResident = new Map<string, Array<{ id: string; text: string }>>()
+    for (const topic of topics || []) {
+      const list = topicsByResident.get(topic.resident_id) || []
+      list.push({ id: topic.id, text: topic.topic_text })
+      topicsByResident.set(topic.resident_id, list)
+    }
+
+    // 4. Build tick input
+    const allNames = residents.map((r) => r.name)
+    const tickInput: TickResidentInput[] = residents.map((r) => ({
+      id: r.id,
+      name: r.name,
+      gender: r.gender,
+      sociability: r.sociability,
+      energy: r.energy,
+      likes: r.likes,
+      dislikes: r.dislikes,
+      mood: r.mood,
+      recentMemories: memoriesByResident.get(r.id) || [],
+      nearbyResidentNames: allNames.filter((n) => n !== r.name),
+      pendingTopics: (topicsByResident.get(r.id) || []).map((t) => t.text),
+    }))
+
+    // 5. Call Groq once for the whole batch
+    const prompt = buildTickPrompt(tickInput)
+    const tickResult = await callGroqTick(prompt)
+
+    // 6. Write results back
+    const now = new Date().toISOString()
+    for (const result of tickResult.results) {
+      // Update resident: mood (if changed) + last_ticked_at + ai_reason
+      const updates: Record<string, string> = { 
+        last_ticked_at: now,
+        ai_reason: result.reason,
+        ai_reason_set_at: now
+      }
+      if (result.newMood) updates.mood = result.newMood
+
+      await supabaseAdmin.from('residents').update(updates).eq('id', result.id)
+
+      // Insert new memory if present
+      if (result.newMemory) {
+        await supabaseAdmin.from('memories').insert({
+          resident_id: result.id,
+          content: result.newMemory,
+        })
+
+        // Prune memories beyond MAX_MEMORIES for this resident
+        const { data: residentMemories } = await supabaseAdmin
+          .from('memories')
+          .select('id')
+          .eq('resident_id', result.id)
+          .order('created_at', { ascending: false })
+
+        if (residentMemories && residentMemories.length > MAX_MEMORIES) {
+          const idsToDelete = residentMemories.slice(MAX_MEMORIES).map((m) => m.id)
+          await supabaseAdmin.from('memories').delete().in('id', idsToDelete)
+        }
+      }
+
+      // Mark all pending topics for this resident as used
+      const pendingTopicIds = (topicsByResident.get(result.id) || []).map((t) => t.id)
+      if (pendingTopicIds.length > 0) {
+        await supabaseAdmin
+          .from('topics')
+          .update({ used: true })
+          .in('id', pendingTopicIds)
+      }
+    }
+
+    return NextResponse.json({
+      processed: tickResult.results.length,
+      results: tickResult.results,
+    })
+  } catch (err) {
+    console.error('Tick error:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Unknown tick error' },
+      { status: 500 }
+    )
+  }
+}
+===== E:\WebProj\RandomResident\app\layout.tsx =====
+import type { Metadata } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: 'Random Resident',
+  description: 'A Tomodachi Life-inspired web app prototype',
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  )
+}
+===== E:\WebProj\RandomResident\app\page.tsx =====
+import MainContent from '@/components/MainContent'
+
+export default function Home() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-indigo-100 p-4">
+      <h1 className="mb-12 text-4xl font-bold text-gray-800">Your Residents</h1>
+      <MainContent />
+    </main>
+  )
+}
+===== E:\WebProj\RandomResident\tailwind.config.ts =====
+import type { Config } from 'next'
+
+const config: Config = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+export default config
+===== E:\WebProj\RandomResident\next-env.d.ts =====
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/building-your-application/configuring/typescript for more information.
