@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase/server'
+import { getSupabaseAdmin } from '@/lib/supabase/server'
 import { buildTickPrompt } from '@/lib/tick/buildPrompt'
 import { callGroqTick } from '@/lib/tick/groqClient'
 import { TickResidentInput } from '@/lib/tick/types'
@@ -15,6 +15,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const supabaseAdmin = getSupabaseAdmin()
+
     // 1. Fetch the oldest-ticked residents, up to BATCH_SIZE
     const { data: residents, error: residentsError } = await supabaseAdmin
       .from('residents')
