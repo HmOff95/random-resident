@@ -53,7 +53,7 @@ export default function TopicModal({ residentId, residentName, userId, onClose }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-96 rounded-lg bg-white p-6 shadow-lg">
+      <div className="w-full mx-4 sm:mx-0 sm:max-w-md rounded-lg bg-white p-6 shadow-lg">
         <h2 className="mb-4 text-xl font-bold">Talk to {residentName}</h2>
 
         {confirmation ? (
@@ -70,7 +70,7 @@ export default function TopicModal({ residentId, residentName, userId, onClose }
               onChange={(e) => setTopicText(e.target.value.slice(0, 100))}
               placeholder="What should they talk about?"
               maxLength={100}
-              className="mb-2 w-full rounded border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="mb-2 w-full rounded border border-gray-300 p-2 sm:p-3 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
               rows={4}
             />
             <div className="mb-4 text-xs text-gray-500">
@@ -80,14 +80,14 @@ export default function TopicModal({ residentId, residentName, userId, onClose }
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 rounded bg-gray-300 px-4 py-2 font-semibold hover:bg-gray-400"
+                className="flex-1 rounded bg-gray-300 px-3 sm:px-4 py-2 text-sm sm:text-base font-semibold hover:bg-gray-400"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={!topicText.trim() || isLoading}
-                className="flex-1 rounded bg-blue-500 px-4 py-2 font-semibold text-white hover:bg-blue-600 disabled:bg-gray-400"
+                className="flex-1 rounded bg-blue-500 px-3 sm:px-4 py-2 text-sm sm:text-base font-semibold text-white hover:bg-blue-600 disabled:bg-gray-400"
               >
                 {isLoading ? 'Sending...' : 'Send'}
               </button>

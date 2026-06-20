@@ -18,6 +18,7 @@ function randomFromPalette(): string {
 
 export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editGender, setEditGender] = useState<Gender>('unspecified')
@@ -35,6 +36,12 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
   const handleOpenPanel = () => {
     setIsOpen(true)
+    setIsExpanded(false) // Reset to half-height on open
+  }
+
+  const handleClosePanel = () => {
+    setIsOpen(false)
+    setIsExpanded(false) // Reset expanded state on close
   }
 
   const handleSaveName = async (e: FormEvent, residentId: string) => {
@@ -192,36 +199,280 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
-      {/* Toggle Button */}
+    <div>
+      {/* Toggle Button - hidden on mobile when panel is open, always visible on desktop */}
       <button
         onClick={handleOpenPanel}
-        className="mb-4 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors"
+        className="fixed bottom-6 right-6 z-50 mb-4 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors md:flex hidden"
       >
         My Residents ({myResidents.length}/5)
       </button>
 
-      {/* Slide-in Panel */}
+      {/* Mobile toggle button - visible only on mobile and when panel not open */}
+      {!isOpen && (
+        <button
+          onClick={handleOpenPanel}
+          className="fixed bottom-6 right-6 z-50 md:hidden rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors"
+        >
+          My Residents ({myResidents.length}/5)
+        </button>
+      )}
+
+      {/* Slide-in Panel / Bottom Sheet */}
       {isOpen && (
-        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}>
+        <div className="fixed inset-0 z-40" onClick={handleClosePanel}>
+          {/* Desktop: right sidebar */}
           <div
-            className="fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl overflow-y-auto transform transition-transform"
+            className="hidden md:flex fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl overflow-y-auto transform transition-transform flex-col"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: '100%' }}
           >
             {/* Header */}
             <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={handleClosePanel}
                 className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
               >
                 ×
               </button>
             </div>
 
-            {/* Content */}
-            <div className="p-6 space-y-6">
+            {/* Content - scrollable on desktop */}
+            <div className="overflow-y-auto flex-1 p-6 space-y-6">
+              {/* Error Message */}
+              {error && (
+                <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              {/* Residents List */}
+              {myResidents.length === 0 ? (
+                <p className="text-gray-600 text-sm">No residents yet. Create one to get started!</p>
+              ) : (
+                <div className="space-y-4">
+                  {myResidents.map((resident) => (
+                    <div key={resident.id} className="border border-gray-200 rounded-lg p-4">
+                      {/* Resident Header */}
+                      <div className="flex items-center gap-4 mb-4">
+                        <div
+                          className="flex-shrink-0 rounded-full"
+                          style={{
+                            width: AVATAR_SIZE,
+                            height: AVATAR_SIZE,
+                            backgroundColor: resident.color,
+                            backgroundImage: resident.photo_url
+                              ? `url(${resident.photo_url})`
+                              : undefined,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }}
+                        />
+                        <div className="flex-grow">
+                          {editingId === resident.id ? (
+                            <form onSubmit={(e) => handleSaveName(e, resident.id)} className="space-y-2">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                placeholder="Resident name"
+                                className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                                autoFocus
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={isSavingName}
+                                  className="flex-1 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm font-medium py-1 transition-colors"
+                                >
+                                  {isSavingName ? 'Saving...' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingId(null)}
+                                  className="flex-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div>
+                              <p className="font-medium text-gray-800">{resident.name}</p>
+                              <button
+                                onClick={() => {
+                                  setEditingId(resident.id)
+                                  setEditName(resident.name)
+                                  setEditGender(resident.gender)
+                                  setEditLikes(resident.likes)
+                                  setEditDislikes(resident.dislikes)
+                                }}
+                                className="text-xs text-blue-500 hover:text-blue-700"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDeleteResident(resident.id)}
+                          className="text-red-500 hover:text-red-700 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Photo Upload */}
+                      {editingId === resident.id && (
+                        <div className="border-t pt-4 space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Upload Photo
+                            </label>
+                            <label className="block">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handlePhotoUpload(e, resident.id)}
+                                disabled={isUploadingPhoto}
+                                className="hidden"
+                              />
+                              <div className="w-full rounded border-2 border-dashed border-gray-300 hover:border-blue-400 px-3 py-3 text-center cursor-pointer transition-colors">
+                                {isUploadingPhoto ? (
+                                  <p className="text-xs text-gray-600">Uploading...</p>
+                                ) : (
+                                  <p className="text-xs text-gray-600">
+                                    Click to choose image
+                                  </p>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+
+                          {/* Gender Selector */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Gender
+                            </label>
+                            <select
+                              value={editGender}
+                              onChange={(e) => setEditGender(e.target.value as Gender)}
+                              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                            >
+                              <option value="unspecified">Unspecified</option>
+                              <option value="female">Female</option>
+                              <option value="male">Male</option>
+                            </select>
+                          </div>
+
+                          {/* Likes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Likes ({editLikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`like-${food}`}
+                                  onClick={() => toggleLike(food)}
+                                  disabled={editLikes.length >= 3 && !editLikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editLikes.includes(food)
+                                      ? 'bg-green-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Dislikes Picker */}
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Dislikes ({editDislikes.length}/3)
+                            </label>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {FOOD_CATALOG.map((food) => (
+                                <button
+                                  key={`dislike-${food}`}
+                                  onClick={() => toggleDislike(food)}
+                                  disabled={editDislikes.length >= 3 && !editDislikes.includes(food)}
+                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                    editDislikes.includes(food)
+                                      ? 'bg-red-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                  }`}
+                                >
+                                  {food}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Save Preferences Button */}
+                          <button
+                            onClick={() => handleSavePreferences(resident.id)}
+                            disabled={isSavingPreferences}
+                            className="w-full rounded bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white text-sm font-medium py-2 transition-colors"
+                          >
+                            {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Resident Button */}
+              <div>
+                <button
+                  onClick={handleAddResident}
+                  disabled={!canAddResident || isCreating}
+                  className="w-full rounded bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+                >
+                  {isCreating ? 'Creating...' : '+ Add Resident'}
+                </button>
+                {!canAddResident && (
+                  <p className="text-xs text-gray-500 text-center mt-2">
+                    5 resident limit reached
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Mobile: bottom sheet */}
+          <div
+            className="md:hidden fixed bottom-0 left-0 right-0 bg-white rounded-t-lg shadow-xl flex flex-col transform transition-all duration-300"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              height: isExpanded ? '100vh' : '50vh',
+            }}
+          >
+            {/* Drag Handle */}
+            <div
+              className="flex justify-center items-center py-2 border-b border-gray-200 cursor-pointer hover:bg-gray-50"
+              onClick={() => setIsExpanded(!isExpanded)}
+            >
+              <div className="w-12 h-1 bg-gray-300 rounded-full" />
+            </div>
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
+              <button
+                onClick={handleClosePanel}
+                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Content - scrollable */}
+            <div className="overflow-y-auto flex-1 p-6 space-y-6">
               {/* Error Message */}
               {error && (
                 <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">

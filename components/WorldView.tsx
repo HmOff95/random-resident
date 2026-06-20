@@ -13,10 +13,12 @@ export default function WorldView() {
   const { residents, loadResidents, simulateStep, addResident, removeResident, updateResidentIdentity, updateResidentPosition } = useResidentStore()
   const [user, setUser] = useState<any>(null)
   const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null)
+  const [hasSeenScrollHint, setHasSeenScrollHint] = useState(false)
   const positionChannelRef = useRef<any>(null)
   const identityChannelRef = useRef<any>(null)
   const residentsRef = useRef(residents)
   const lastBroadcast = useRef(0)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   // Fetch current user and load initial residents
   useEffect(() => {
@@ -87,29 +89,53 @@ export default function WorldView() {
   })
 
   return (
-    <div
-      className="relative rounded-lg border-2 border-gray-300 bg-gray-50 shadow-lg"
-      style={{
-        width: ROOM_BOUNDS.width,
-        height: ROOM_BOUNDS.height,
-      }}
-    >
-      {residents.map((resident) => (
-        <ResidentAvatar
-          key={resident.id}
-          resident={resident}
-          onAvatarClick={() => setSelectedResidentId(resident.id)}
-        />
-      ))}
-
-      {selectedResidentId && user && (
-        <TopicModal
-          residentId={selectedResidentId}
-          residentName={residents.find(r => r.id === selectedResidentId)?.name || 'Unknown'}
-          userId={user.id}
-          onClose={() => setSelectedResidentId(null)}
-        />
+    <>
+      {/* Scroll hint for mobile */}
+      {!hasSeenScrollHint && (
+        <div className="md:hidden fixed top-4 left-1/2 transform -translate-x-1/2 z-30 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg animate-bounce">
+          Scroll to explore the room 👆
+        </div>
       )}
-    </div>
+
+      {/* Scroll Container - scrollable on mobile, centered on desktop */}
+      <div
+        ref={scrollContainerRef}
+        className="md:flex md:items-center md:justify-center w-full overflow-auto"
+        style={{
+          minHeight: 'min(100vh, calc(100vh - 120px))',
+        }}
+        onScroll={() => {
+          if (!hasSeenScrollHint) {
+            setHasSeenScrollHint(true)
+          }
+        }}
+      >
+        {/* Room container */}
+        <div
+          className="relative rounded-lg border-2 border-gray-300 bg-gray-50 shadow-lg flex-shrink-0"
+          style={{
+            width: ROOM_BOUNDS.width,
+            height: ROOM_BOUNDS.height,
+          }}
+        >
+          {residents.map((resident) => (
+            <ResidentAvatar
+              key={resident.id}
+              resident={resident}
+              onAvatarClick={() => setSelectedResidentId(resident.id)}
+            />
+          ))}
+
+          {selectedResidentId && user && (
+            <TopicModal
+              residentId={selectedResidentId}
+              residentName={residents.find(r => r.id === selectedResidentId)?.name || 'Unknown'}
+              userId={user.id}
+              onClose={() => setSelectedResidentId(null)}
+            />
+          )}
+        </div>
+      </div>
+    </>
   )
 }
