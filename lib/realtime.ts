@@ -65,9 +65,9 @@ export function createPresenceChannel(
       onCursorUpdate(payload as CursorPayload)
     })
     .on('presence', { event: 'sync' }, () => {
-      const state = channel.presenceState()
+      const state = channel.presenceState<PresenceUser>()
       const users = Object.values(state).flat()
-      onPresenceSync(users as PresenceUser[])
+      onPresenceSync(users)
     })
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {

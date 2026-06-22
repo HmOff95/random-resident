@@ -68,18 +68,18 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-indigo-100 p-4">
-      <div className="w-full max-w-md rounded-lg bg-white shadow-lg p-8">
-        <h1 className="mb-2 text-2xl font-bold text-gray-800">
-          {isSignUp ? 'Create Account' : 'Sign In'}
+    <main className="flex min-h-screen flex-col items-center justify-center bg-cream p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white-warm shadow-warm p-8">
+        <h1 className="mb-1 text-2xl font-extrabold text-brown text-center">
+          Random Resident
         </h1>
-        <p className="mb-6 text-gray-600">
+        <p className="mb-6 text-brown-light text-sm text-center">
           {isSignUp ? 'Join the living room' : 'Welcome back'}
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-brown mb-1.5">
               Email
             </label>
             <input
@@ -88,12 +88,12 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               required
-              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-full border border-sand px-4 py-2.5 bg-cream text-brown placeholder:text-brown-light focus:border-coral focus:outline-none transition-colors"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-semibold text-brown mb-1.5">
               Password
             </label>
             <input
@@ -102,12 +102,12 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
-              className="w-full rounded border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-full border border-sand px-4 py-2.5 bg-cream text-brown placeholder:text-brown-light focus:border-coral focus:outline-none transition-colors"
             />
           </div>
 
           {error && (
-            <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+            <div className="rounded-xl bg-coral/10 border border-coral p-3 text-sm text-coral">
               {error}
             </div>
           )}
@@ -115,7 +115,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+            className="w-full rounded-full bg-coral hover:bg-coral-dark disabled:opacity-40 text-white font-bold py-2.5 transition-colors shadow-coral"
           >
             {loading
               ? isSignUp
@@ -128,12 +128,12 @@ export default function LoginPage() {
         </form>
 
         <div className="mt-6 text-center">
-          <p className="text-gray-600 text-sm">
+          <p className="text-brown-light text-sm">
             {isSignUp ? 'Already have an account?' : "Don't have an account?"}
           </p>
           <button
             onClick={() => setIsSignUp(!isSignUp)}
-            className="text-blue-500 hover:text-blue-700 font-medium text-sm mt-2"
+            className="text-coral hover:text-coral-dark font-semibold text-sm mt-2"
           >
             {isSignUp ? 'Sign In' : 'Sign Up'}
           </button>

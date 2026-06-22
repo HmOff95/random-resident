@@ -84,6 +84,10 @@ export const MIN_DISTANCE = AVATAR_SIZE // sum of two radii — circles must sta
 export const SOCIAL_DISTANCE = AVATAR_SIZE * 1.5 // desired gap when "hanging out" with someone
 export const ARRIVAL_THRESHOLD = 4 // px — close enough to target counts as "arrived"
 
+export const PROXIMITY_THRESHOLD = 200 // px — messages only visible within this distance
+export const MESSAGE_BUBBLE_TTL = 8000 // ms — how long a bubble stays visible in the room before fading
+export const MAX_CHAT_HISTORY = 100 // max messages loaded from DB on mount
+
 export function speedFor(traits: Traits): number {
   // px per second
   return 30 + traits.energy * 60

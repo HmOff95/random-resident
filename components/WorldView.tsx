@@ -2,33 +2,42 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useAnimationFrame } from 'framer-motion'
-import { ROOM_BOUNDS } from '@/lib/types'
+import { ROOM_BOUNDS, PROXIMITY_THRESHOLD, MAX_CHAT_HISTORY } from '@/lib/types'
 import { useResidentStore } from '@/lib/residentStore'
 import { supabase } from '@/lib/supabase/client'
+import { MessageRow } from '@/lib/supabase/types'
 import { createWorldChannels, createPresenceChannel, broadcastCursor, type CursorPayload, type PresenceUser } from '@/lib/realtime'
+import { useChatStore } from '@/lib/chatStore'
 import ResidentAvatar from './ResidentAvatar'
 import TopicModal from './TopicModal'
 import LiveCursor from './LiveCursor'
-import OnlineList from './OnlineList'
+import MessageBubble from './MessageBubble'
+import AppHeader from './AppHeader'
+import ChatPanel from './ChatPanel'
 
 export default function WorldView() {
   const { residents, loadResidents, simulateStep, addResident, removeResident, updateResidentIdentity, updateResidentPosition } = useResidentStore()
+  const { messages, loadMessages, addMessage, updateProximity } = useChatStore()
   const [user, setUser] = useState<any>(null)
   const [selectedResidentId, setSelectedResidentId] = useState<string | null>(null)
   const [hasSeenScrollHint, setHasSeenScrollHint] = useState(false)
   const [isTouchDevice, setIsTouchDevice] = useState(false)
   const [cursors, setCursors] = useState<Record<string, CursorPayload>>({})
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([])
+  const [isChatOpen, setIsChatOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [myCursorPos, setMyCursorPos] = useState({ x: 0, y: 0 })
   const positionChannelRef = useRef<any>(null)
   const identityChannelRef = useRef<any>(null)
   const presenceChannelRef = useRef<any>(null)
+  const messagesChannelRef = useRef<any>(null)
   const residentsRef = useRef(residents)
   const lastBroadcast = useRef(0)
   const lastCursorBroadcast = useRef(0)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const roomRef = useRef<HTMLDivElement>(null)
 
-  // Fetch current user and load initial residents
+  // Fetch current user and load initial residents and messages
   useEffect(() => {
     const fetchUserAndResidents = async () => {
       const { data: { user: sessionUser } } = await supabase.auth.getUser()
@@ -40,10 +49,18 @@ export default function WorldView() {
       if (data) {
         loadResidents(data)
       }
+
+      // Load initial message history
+      const { data: msgData } = await supabase
+        .from('messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(MAX_CHAT_HISTORY)
+      if (msgData) loadMessages(msgData.reverse())
     }
 
     fetchUserAndResidents()
-  }, [loadResidents])
+  }, [loadResidents, loadMessages])
 
   // Detect touch device
   useEffect(() => {
@@ -109,6 +126,38 @@ export default function WorldView() {
     }
   }, [user, residents])
 
+  // Set up messages channel for real-time chat
+  useEffect(() => {
+    if (!user) return
+
+    const channel = supabase
+      .channel('world-messages')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        ({ new: row }) => {
+          addMessage(row as MessageRow)
+          // update proximity for new message immediately
+          updateProximity(myCursorPos.x, myCursorPos.y, PROXIMITY_THRESHOLD)
+          // increment unread if chat panel is closed and message is nearby
+          if (!isChatOpen) {
+            const dx = row.x - myCursorPos.x
+            const dy = row.y - myCursorPos.y
+            if (Math.sqrt(dx * dx + dy * dy) <= PROXIMITY_THRESHOLD) {
+              setUnreadCount((n) => n + 1)
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    messagesChannelRef.current = channel
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user, isChatOpen, myCursorPos])
+
   useAnimationFrame((time, delta) => {
     simulateStep(delta / 1000) // delta is in ms, convert to seconds
 
@@ -155,13 +204,26 @@ export default function WorldView() {
         name: myDisplayName,
         color: myDisplayColor,
       })
+
+      // Track cursor position for chat proximity
+      setMyCursorPos({ x, y })
+      updateProximity(x, y, PROXIMITY_THRESHOLD)
     }
+  }
+
+  const handleChatToggle = () => {
+    setIsChatOpen((prev) => !prev)
+    setUnreadCount(0)
   }
 
   return (
     <>
-      {/* Online presence list */}
-      <OnlineList users={onlineUsers} />
+      {/* App Header */}
+      <AppHeader
+        onlineUsers={onlineUsers}
+        onChatToggle={handleChatToggle}
+        unreadCount={unreadCount}
+      />
 
       {/* Live cursors overlay */}
       {Object.values(cursors).map((cursor) => (
@@ -176,7 +238,7 @@ export default function WorldView() {
 
       {/* Scroll hint for mobile */}
       {!hasSeenScrollHint && (
-        <div className="md:hidden fixed top-4 left-1/2 transform -translate-x-1/2 z-30 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg animate-bounce">
+        <div className="md:hidden fixed top-20 left-1/2 transform -translate-x-1/2 z-30 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg animate-bounce">
           Scroll to explore the room 👆
         </div>
       )}
@@ -184,9 +246,10 @@ export default function WorldView() {
       {/* Scroll Container - scrollable on mobile, centered on desktop */}
       <div
         ref={scrollContainerRef}
-        className="md:flex md:items-center md:justify-center w-full overflow-auto"
+        className="md:flex md:items-center md:justify-center w-full overflow-auto bg-cream"
         style={{
           minHeight: 'min(100vh, calc(100vh - 120px))',
+          marginTop: '64px',
         }}
         onScroll={() => {
           if (!hasSeenScrollHint) {
@@ -197,7 +260,7 @@ export default function WorldView() {
         {/* Room container */}
         <div
           ref={roomRef}
-          className="relative rounded-lg border-2 border-gray-300 bg-gray-50 shadow-lg flex-shrink-0"
+          className="relative rounded-2xl dot-grid shadow-warm flex-shrink-0 overflow-hidden"
           style={{
             width: ROOM_BOUNDS.width,
             height: ROOM_BOUNDS.height,
@@ -212,6 +275,14 @@ export default function WorldView() {
             />
           ))}
 
+          {/* Render speech bubbles inside the room */}
+          {messages
+            .filter((m) => m.isNearby)
+            .slice(-10)
+            .map((msg) => (
+              <MessageBubble key={msg.id} message={msg} />
+            ))}
+
           {selectedResidentId && user && (
             <TopicModal
               residentId={selectedResidentId}
@@ -222,6 +293,19 @@ export default function WorldView() {
           )}
         </div>
       </div>
+
+      {/* Chat Panel */}
+      <ChatPanel
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        user={{
+          id: user?.id || '',
+          displayName: residents.find(r => r.owner_id === user?.id)?.name || 'Guest',
+          displayColor: residents.find(r => r.owner_id === user?.id)?.color || '#9CA3AF',
+        }}
+        myCursorX={myCursorPos.x}
+        myCursorY={myCursorPos.y}
+      />
     </>
   )
 }

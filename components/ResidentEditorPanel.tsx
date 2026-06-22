@@ -36,12 +36,12 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
   const handleOpenPanel = () => {
     setIsOpen(true)
-    setIsExpanded(false) // Reset to half-height on open
+    setIsExpanded(false)
   }
 
   const handleClosePanel = () => {
     setIsOpen(false)
-    setIsExpanded(false) // Reset expanded state on close
+    setIsExpanded(false)
   }
 
   const handleSaveName = async (e: FormEvent, residentId: string) => {
@@ -115,25 +115,21 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
     setError(null)
 
     try {
-      // Get file extension
       const ext = file.name.split('.').pop() || 'png'
       const filePath = `${user.id}/${residentId}/avatar.${ext}`
 
-      // Upload to storage
       const { error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(filePath, file, { upsert: true })
 
       if (uploadError) throw uploadError
 
-      // Get public URL
       const { data: urlData } = supabase.storage
         .from('avatars')
         .getPublicUrl(filePath)
 
       const photoUrl = urlData.publicUrl
 
-      // Update database
       const { error: updateError } = await supabase
         .from('residents')
         .update({ photo_url: photoUrl })
@@ -141,13 +137,11 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
       if (updateError) throw updateError
 
-      // Update local store immediately
       updateResidentIdentity(residentId, { photo_url: photoUrl })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload photo')
     } finally {
       setIsUploadingPhoto(false)
-      // Reset file input
       if (e.target) {
         e.target.value = ''
       }
@@ -200,63 +194,63 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
   return (
     <div>
-      {/* Toggle Button - hidden on mobile when panel is open, always visible on desktop */}
+      {/* Toggle Button */}
       <button
         onClick={handleOpenPanel}
-        className="fixed bottom-6 right-6 z-50 mb-4 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors md:flex hidden"
+        className="fixed bottom-6 right-6 z-50 mb-4 rounded-full bg-mint hover:bg-mint/80 text-white font-bold px-6 py-3 shadow-warm transition-colors md:flex hidden"
       >
         My Residents ({myResidents.length}/5)
       </button>
 
-      {/* Mobile toggle button - visible only on mobile and when panel not open */}
+      {/* Mobile toggle button */}
       {!isOpen && (
         <button
           onClick={handleOpenPanel}
-          className="fixed bottom-6 right-6 z-50 md:hidden rounded-full bg-blue-500 hover:bg-blue-600 text-white font-medium px-6 py-3 shadow-lg transition-colors"
+          className="fixed bottom-6 right-6 z-50 md:hidden rounded-full bg-mint hover:bg-mint/80 text-white font-bold px-6 py-3 shadow-warm transition-colors"
         >
           My Residents ({myResidents.length}/5)
         </button>
       )}
 
-      {/* Slide-in Panel / Bottom Sheet */}
+      {/* Slide-in Panel */}
       {isOpen && (
         <div className="fixed inset-0 z-40" onClick={handleClosePanel}>
           {/* Desktop: right sidebar */}
           <div
-            className="hidden md:flex fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl overflow-y-auto transform transition-transform flex-col"
+            className="hidden md:flex fixed right-0 top-0 bottom-0 w-96 bg-white-warm shadow-warm overflow-y-auto transform transition-transform flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
+            <div className="sticky top-0 bg-white-warm border-b border-sand p-4 flex items-center justify-between">
+              <h2 className="text-lg font-extrabold text-brown">My Residents</h2>
               <button
                 onClick={handleClosePanel}
-                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+                className="text-brown-light hover:text-brown text-2xl leading-none"
               >
                 ×
               </button>
             </div>
 
-            {/* Content - scrollable on desktop */}
+            {/* Content */}
             <div className="overflow-y-auto flex-1 p-6 space-y-6">
               {/* Error Message */}
               {error && (
-                <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                <div className="rounded-xl bg-coral/10 border border-coral p-3 text-sm text-coral">
                   {error}
                 </div>
               )}
 
               {/* Residents List */}
               {myResidents.length === 0 ? (
-                <p className="text-gray-600 text-sm">No residents yet. Create one to get started!</p>
+                <p className="text-brown-light text-sm">No residents yet. Create one to get started!</p>
               ) : (
                 <div className="space-y-4">
                   {myResidents.map((resident) => (
-                    <div key={resident.id} className="border border-gray-200 rounded-lg p-4">
+                    <div key={resident.id} className="bg-cream border border-sand rounded-2xl p-4">
                       {/* Resident Header */}
                       <div className="flex items-center gap-4 mb-4">
                         <div
-                          className="flex-shrink-0 rounded-full"
+                          className="flex-shrink-0 rounded-full border-2 border-white-warm"
                           style={{
                             width: AVATAR_SIZE,
                             height: AVATAR_SIZE,
@@ -276,21 +270,21 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                 value={editName}
                                 onChange={(e) => setEditName(e.target.value)}
                                 placeholder="Resident name"
-                                className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                                className="w-full rounded-full border border-sand px-3 py-1.5 text-sm bg-white-warm focus:border-coral focus:outline-none text-brown font-semibold transition-colors"
                                 autoFocus
                               />
                               <div className="flex gap-2">
                                 <button
                                   type="submit"
                                   disabled={isSavingName}
-                                  className="flex-1 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm font-medium py-1 transition-colors"
+                                  className="flex-1 rounded-full bg-coral hover:bg-coral-dark disabled:opacity-40 text-white text-sm font-bold py-1.5 transition-colors"
                                 >
                                   {isSavingName ? 'Saving...' : 'Save'}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setEditingId(null)}
-                                  className="flex-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1 transition-colors"
+                                  className="flex-1 rounded-full bg-sand text-brown-light hover:text-brown text-sm font-semibold py-1.5 transition-colors"
                                 >
                                   Cancel
                                 </button>
@@ -298,7 +292,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                             </form>
                           ) : (
                             <div>
-                              <p className="font-medium text-gray-800">{resident.name}</p>
+                              <p className="font-bold text-brown">{resident.name}</p>
                               <button
                                 onClick={() => {
                                   setEditingId(resident.id)
@@ -307,7 +301,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                   setEditLikes(resident.likes)
                                   setEditDislikes(resident.dislikes)
                                 }}
-                                className="text-xs text-blue-500 hover:text-blue-700"
+                                className="text-xs text-coral hover:text-coral-dark font-semibold"
                               >
                                 Edit
                               </button>
@@ -316,7 +310,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                         </div>
                         <button
                           onClick={() => handleDeleteResident(resident.id)}
-                          className="text-red-500 hover:text-red-700 font-bold"
+                          className="text-coral hover:bg-coral/10 rounded-full p-1 font-bold transition-colors"
                         >
                           ✕
                         </button>
@@ -324,9 +318,9 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                       {/* Photo Upload */}
                       {editingId === resident.id && (
-                        <div className="border-t pt-4 space-y-4">
+                        <div className="border-t border-sand pt-4 space-y-4">
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Upload Photo
                             </label>
                             <label className="block">
@@ -337,11 +331,11 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                 disabled={isUploadingPhoto}
                                 className="hidden"
                               />
-                              <div className="w-full rounded border-2 border-dashed border-gray-300 hover:border-blue-400 px-3 py-3 text-center cursor-pointer transition-colors">
+                              <div className="w-full rounded-xl border-2 border-dashed border-sand hover:border-coral bg-cream px-3 py-3 text-center cursor-pointer transition-colors">
                                 {isUploadingPhoto ? (
-                                  <p className="text-xs text-gray-600">Uploading...</p>
+                                  <p className="text-xs text-brown-light">Uploading...</p>
                                 ) : (
-                                  <p className="text-xs text-gray-600">
+                                  <p className="text-xs text-brown-light">
                                     Click to choose image
                                   </p>
                                 )}
@@ -351,23 +345,29 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                           {/* Gender Selector */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Gender
                             </label>
-                            <select
-                              value={editGender}
-                              onChange={(e) => setEditGender(e.target.value as Gender)}
-                              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                            >
-                              <option value="unspecified">Unspecified</option>
-                              <option value="female">Female</option>
-                              <option value="male">Male</option>
-                            </select>
+                            <div className="flex gap-2">
+                              {(['unspecified', 'male', 'female'] as Gender[]).map((g) => (
+                                <button
+                                  key={g}
+                                  onClick={() => setEditGender(g)}
+                                  className={`flex-1 rounded-full px-3 py-2 text-xs font-bold transition-colors ${
+                                    editGender === g
+                                      ? 'bg-coral text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown'
+                                  }`}
+                                >
+                                  {g === 'unspecified' ? 'Any' : g.charAt(0).toUpperCase() + g.slice(1)}
+                                </button>
+                              ))}
+                            </div>
                           </div>
 
                           {/* Likes Picker */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Likes ({editLikes.length}/3)
                             </label>
                             <div className="grid grid-cols-3 gap-2 mb-3">
@@ -376,13 +376,13 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                   key={`like-${food}`}
                                   onClick={() => toggleLike(food)}
                                   disabled={editLikes.length >= 3 && !editLikes.includes(food)}
-                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                  className={`px-2 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                                     editLikes.includes(food)
-                                      ? 'bg-green-500 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                      ? 'bg-mint text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown disabled:opacity-50 disabled:cursor-not-allowed'
                                   }`}
                                 >
-                                  {food}
+                                  ♥ {food}
                                 </button>
                               ))}
                             </div>
@@ -390,7 +390,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                           {/* Dislikes Picker */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Dislikes ({editDislikes.length}/3)
                             </label>
                             <div className="grid grid-cols-3 gap-2 mb-3">
@@ -399,13 +399,13 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                   key={`dislike-${food}`}
                                   onClick={() => toggleDislike(food)}
                                   disabled={editDislikes.length >= 3 && !editDislikes.includes(food)}
-                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                  className={`px-2 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                                     editDislikes.includes(food)
-                                      ? 'bg-red-500 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                      ? 'bg-coral text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown disabled:opacity-50 disabled:cursor-not-allowed'
                                   }`}
                                 >
-                                  {food}
+                                  ✕ {food}
                                 </button>
                               ))}
                             </div>
@@ -415,7 +415,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                           <button
                             onClick={() => handleSavePreferences(resident.id)}
                             disabled={isSavingPreferences}
-                            className="w-full rounded bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white text-sm font-medium py-2 transition-colors"
+                            className="w-full rounded-full bg-coral hover:bg-coral-dark disabled:opacity-40 text-white text-sm font-bold py-2 transition-colors shadow-coral"
                           >
                             {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
                           </button>
@@ -431,12 +431,12 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                 <button
                   onClick={handleAddResident}
                   disabled={!canAddResident || isCreating}
-                  className="w-full rounded bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+                  className="w-full rounded-full bg-mint hover:bg-mint/80 disabled:opacity-40 text-white font-bold py-3 transition-colors shadow-warm"
                 >
                   {isCreating ? 'Creating...' : '+ Add Resident'}
                 </button>
                 {!canAddResident && (
-                  <p className="text-xs text-gray-500 text-center mt-2">
+                  <p className="text-xs text-brown-light text-center mt-2">
                     5 resident limit reached
                   </p>
                 )}
@@ -446,7 +446,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
           {/* Mobile: bottom sheet */}
           <div
-            className="md:hidden fixed bottom-0 left-0 right-0 bg-white rounded-t-lg shadow-xl flex flex-col transform transition-all duration-300"
+            className="md:hidden fixed bottom-0 left-0 right-0 bg-white-warm rounded-t-2xl shadow-warm flex flex-col transform transition-all duration-300"
             onClick={(e) => e.stopPropagation()}
             style={{
               height: isExpanded ? '100vh' : '50vh',
@@ -454,43 +454,43 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
           >
             {/* Drag Handle */}
             <div
-              className="flex justify-center items-center py-2 border-b border-gray-200 cursor-pointer hover:bg-gray-50"
+              className="flex justify-center items-center py-2 border-b border-sand cursor-pointer hover:bg-sand/50"
               onClick={() => setIsExpanded(!isExpanded)}
             >
-              <div className="w-12 h-1 bg-gray-300 rounded-full" />
+              <div className="w-12 h-1 bg-sand rounded-full" />
             </div>
 
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-bold text-gray-800">My Residents</h2>
+            <div className="flex items-center justify-between p-4 border-b border-sand">
+              <h2 className="text-base font-extrabold text-brown">My Residents</h2>
               <button
                 onClick={handleClosePanel}
-                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+                className="text-brown-light hover:text-brown text-2xl leading-none"
               >
                 ×
               </button>
             </div>
 
-            {/* Content - scrollable */}
+            {/* Content */}
             <div className="overflow-y-auto flex-1 p-6 space-y-6">
               {/* Error Message */}
               {error && (
-                <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                <div className="rounded-xl bg-coral/10 border border-coral p-3 text-sm text-coral">
                   {error}
                 </div>
               )}
 
               {/* Residents List */}
               {myResidents.length === 0 ? (
-                <p className="text-gray-600 text-sm">No residents yet. Create one to get started!</p>
+                <p className="text-brown-light text-sm">No residents yet. Create one to get started!</p>
               ) : (
                 <div className="space-y-4">
                   {myResidents.map((resident) => (
-                    <div key={resident.id} className="border border-gray-200 rounded-lg p-4">
+                    <div key={resident.id} className="bg-cream border border-sand rounded-2xl p-4">
                       {/* Resident Header */}
                       <div className="flex items-center gap-4 mb-4">
                         <div
-                          className="flex-shrink-0 rounded-full"
+                          className="flex-shrink-0 rounded-full border-2 border-white-warm"
                           style={{
                             width: AVATAR_SIZE,
                             height: AVATAR_SIZE,
@@ -510,21 +510,21 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                 value={editName}
                                 onChange={(e) => setEditName(e.target.value)}
                                 placeholder="Resident name"
-                                className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                                className="w-full rounded-full border border-sand px-3 py-1.5 text-sm bg-white-warm focus:border-coral focus:outline-none text-brown font-semibold transition-colors"
                                 autoFocus
                               />
                               <div className="flex gap-2">
                                 <button
                                   type="submit"
                                   disabled={isSavingName}
-                                  className="flex-1 rounded bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm font-medium py-1 transition-colors"
+                                  className="flex-1 rounded-full bg-coral hover:bg-coral-dark disabled:opacity-40 text-white text-sm font-bold py-1.5 transition-colors"
                                 >
                                   {isSavingName ? 'Saving...' : 'Save'}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setEditingId(null)}
-                                  className="flex-1 rounded bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1 transition-colors"
+                                  className="flex-1 rounded-full bg-sand text-brown-light hover:text-brown text-sm font-semibold py-1.5 transition-colors"
                                 >
                                   Cancel
                                 </button>
@@ -532,7 +532,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                             </form>
                           ) : (
                             <div>
-                              <p className="font-medium text-gray-800">{resident.name}</p>
+                              <p className="font-bold text-brown">{resident.name}</p>
                               <button
                                 onClick={() => {
                                   setEditingId(resident.id)
@@ -541,7 +541,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                   setEditLikes(resident.likes)
                                   setEditDislikes(resident.dislikes)
                                 }}
-                                className="text-xs text-blue-500 hover:text-blue-700"
+                                className="text-xs text-coral hover:text-coral-dark font-semibold"
                               >
                                 Edit
                               </button>
@@ -550,7 +550,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                         </div>
                         <button
                           onClick={() => handleDeleteResident(resident.id)}
-                          className="text-red-500 hover:text-red-700 font-bold"
+                          className="text-coral hover:bg-coral/10 rounded-full p-1 font-bold transition-colors"
                         >
                           ✕
                         </button>
@@ -558,9 +558,9 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                       {/* Photo Upload */}
                       {editingId === resident.id && (
-                        <div className="border-t pt-4 space-y-4">
+                        <div className="border-t border-sand pt-4 space-y-4">
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Upload Photo
                             </label>
                             <label className="block">
@@ -571,11 +571,11 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                                 disabled={isUploadingPhoto}
                                 className="hidden"
                               />
-                              <div className="w-full rounded border-2 border-dashed border-gray-300 hover:border-blue-400 px-3 py-3 text-center cursor-pointer transition-colors">
+                              <div className="w-full rounded-xl border-2 border-dashed border-sand hover:border-coral bg-cream px-3 py-3 text-center cursor-pointer transition-colors">
                                 {isUploadingPhoto ? (
-                                  <p className="text-xs text-gray-600">Uploading...</p>
+                                  <p className="text-xs text-brown-light">Uploading...</p>
                                 ) : (
-                                  <p className="text-xs text-gray-600">
+                                  <p className="text-xs text-brown-light">
                                     Click to choose image
                                   </p>
                                 )}
@@ -585,38 +585,44 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                           {/* Gender Selector */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Gender
                             </label>
-                            <select
-                              value={editGender}
-                              onChange={(e) => setEditGender(e.target.value as Gender)}
-                              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                            >
-                              <option value="unspecified">Unspecified</option>
-                              <option value="female">Female</option>
-                              <option value="male">Male</option>
-                            </select>
+                            <div className="flex gap-2">
+                              {(['unspecified', 'male', 'female'] as Gender[]).map((g) => (
+                                <button
+                                  key={g}
+                                  onClick={() => setEditGender(g)}
+                                  className={`flex-1 rounded-full px-3 py-2 text-xs font-bold transition-colors ${
+                                    editGender === g
+                                      ? 'bg-coral text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown'
+                                  }`}
+                                >
+                                  {g === 'unspecified' ? 'Any' : g.charAt(0).toUpperCase() + g.slice(1)}
+                                </button>
+                              ))}
+                            </div>
                           </div>
 
                           {/* Likes Picker */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Likes ({editLikes.length}/3)
                             </label>
-                            <div className="grid grid-cols-3 gap-2 mb-3">
+                            <div className="grid grid-cols-3 gap-1.5">
                               {FOOD_CATALOG.map((food) => (
                                 <button
                                   key={`like-${food}`}
                                   onClick={() => toggleLike(food)}
                                   disabled={editLikes.length >= 3 && !editLikes.includes(food)}
-                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                  className={`px-2 py-1 rounded-full text-xs font-semibold transition-colors ${
                                     editLikes.includes(food)
-                                      ? 'bg-green-500 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                      ? 'bg-mint text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown disabled:opacity-50 disabled:cursor-not-allowed'
                                   }`}
                                 >
-                                  {food}
+                                  ♥
                                 </button>
                               ))}
                             </div>
@@ -624,22 +630,22 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
 
                           {/* Dislikes Picker */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                            <label className="block text-sm font-extrabold text-brown mb-2">
                               Dislikes ({editDislikes.length}/3)
                             </label>
-                            <div className="grid grid-cols-3 gap-2 mb-3">
+                            <div className="grid grid-cols-3 gap-1.5">
                               {FOOD_CATALOG.map((food) => (
                                 <button
                                   key={`dislike-${food}`}
                                   onClick={() => toggleDislike(food)}
                                   disabled={editDislikes.length >= 3 && !editDislikes.includes(food)}
-                                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                  className={`px-2 py-1 rounded-full text-xs font-semibold transition-colors ${
                                     editDislikes.includes(food)
-                                      ? 'bg-red-500 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed'
+                                      ? 'bg-coral text-white'
+                                      : 'bg-sand text-brown-light hover:text-brown disabled:opacity-50 disabled:cursor-not-allowed'
                                   }`}
                                 >
-                                  {food}
+                                  ✕
                                 </button>
                               ))}
                             </div>
@@ -649,7 +655,7 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                           <button
                             onClick={() => handleSavePreferences(resident.id)}
                             disabled={isSavingPreferences}
-                            className="w-full rounded bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white text-sm font-medium py-2 transition-colors"
+                            className="w-full rounded-full bg-coral hover:bg-coral-dark disabled:opacity-40 text-white text-sm font-bold py-2 transition-colors shadow-coral"
                           >
                             {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
                           </button>
@@ -665,12 +671,12 @@ export default function ResidentEditorPanel({ user }: ResidentEditorPanelProps) 
                 <button
                   onClick={handleAddResident}
                   disabled={!canAddResident || isCreating}
-                  className="w-full rounded bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 transition-colors"
+                  className="w-full rounded-full bg-mint hover:bg-mint/80 disabled:opacity-40 text-white font-bold py-3 transition-colors shadow-warm"
                 >
                   {isCreating ? 'Creating...' : '+ Add Resident'}
                 </button>
                 {!canAddResident && (
-                  <p className="text-xs text-gray-500 text-center mt-2">
+                  <p className="text-xs text-brown-light text-center mt-2">
                     5 resident limit reached
                   </p>
                 )}

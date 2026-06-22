@@ -31,3 +31,14 @@ export interface TopicRow {
   used: boolean
   created_at: string
 }
+
+export interface MessageRow {
+  id: string
+  user_id: string
+  display_name: string
+  display_color: string
+  content: string
+  x: number
+  y: number
+  created_at: string
+}

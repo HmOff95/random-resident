@@ -23,14 +23,14 @@ export default function ResidentAvatar({ resident, onAvatarClick }: ResidentAvat
       }}
     >
       {/* Reason bubble */}
-      <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 transform whitespace-nowrap rounded-full bg-black/75 px-3 py-1 text-xs text-white">
+      <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 rounded-2xl bg-brown text-white px-3 py-1.5 text-xs whitespace-nowrap max-w-xs overflow-hidden text-ellipsis drop-shadow-sm">
         {resident.intent.reason}
       </div>
 
       {/* Avatar circle */}
       <div
         onClick={onAvatarClick}
-        className="flex cursor-pointer items-center justify-center rounded-full shadow-md transition-transform hover:scale-110"
+        className="flex cursor-pointer items-center justify-center rounded-full shadow-resident border-2 border-white-warm transition-transform hover:scale-110"
         style={{
           width: AVATAR_SIZE,
           height: AVATAR_SIZE,
@@ -44,13 +44,13 @@ export default function ResidentAvatar({ resident, onAvatarClick }: ResidentAvat
       >
         {/* Topic indicator badge */}
         {hasPendingTopics && (
-          <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-xs font-bold text-gray-800">
+          <div className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-mint text-xs font-bold text-white">
             💭
           </div>
         )}
 
         {/* Name label */}
-        <div className="absolute top-full mt-1 text-center text-xs font-semibold text-gray-800">
+        <div className="absolute top-full mt-1 text-center font-bold text-brown text-xs drop-shadow-sm">
           {resident.name}
         </div>
       </div>

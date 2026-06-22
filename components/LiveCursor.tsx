@@ -33,10 +33,9 @@ export default function LiveCursor({ x, y, name, color }: LiveCursorProps) {
       </svg>
 
       <div
-        className="px-2 py-1 rounded text-xs font-semibold text-white whitespace-nowrap"
+        className="px-2 py-0.5 rounded-full text-xs font-bold text-white whitespace-nowrap shadow-warm"
         style={{
           backgroundColor: color,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
         }}
       >
         {name}
